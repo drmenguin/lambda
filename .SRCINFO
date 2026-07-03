@@ -8,6 +8,6 @@ pkgbase = lambda
 	depends = glibc
 	depends = ncurses
 	source = lambda-0.1.1.tar.gz::https://github.com/drmenguin/lambda/archive/refs/tags/v0.1.1.tar.gz
-	sha256sums = SKIP
+	sha256sums = 323045f7610643a6bf37031e12c53d78b7db7466db517bfd86cbbaba1447ddc9
 
 pkgname = lambda
