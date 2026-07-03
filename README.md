@@ -6,6 +6,8 @@
 `lambda` is a small lambda calculus beta-reduction playground for the terminal.
 It includes an interactive ncurses interface and a plain command-line reducer.
 
+![Demo of lambda reducing terms in the terminal](images/demo.gif)
+
 ## What It Does
 Lambda expressions are parsed, printed with Unicode lambda notation, and reduced
 using normal-order beta reduction.
