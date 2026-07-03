@@ -20,7 +20,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libncurses-dev groff
+          sudo apt-get install -y build-essential libncurses-dev groff dpkg-dev
 
       - name: Build
         run: make -B
@@ -35,3 +35,8 @@ jobs:
           test -x install-root/usr/bin/lambda-cli
           test -f install-root/usr/share/man/man1/lambda.1
           test -f install-root/usr/share/man/man1/lambda-cli.1
+
+      - name: Build Debian package
+        run: |
+          make deb
+          test -f dist/lambda_*.deb

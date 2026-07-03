@@ -5,6 +5,7 @@ lambda-ncurses
 
 /old/
 
+/dist/
 /pkg/
 /src/
 /install-root/

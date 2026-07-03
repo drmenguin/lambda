@@ -2,10 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 CC ?= cc
+VERSION ?= 0.1.2
 PREFIX ?= /usr
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man
 INSTALL ?= install
+DISTDIR ?= dist
+DEBARCH ?= $(shell dpkg --print-architecture 2>/dev/null || echo amd64)
+DEBROOT := $(DISTDIR)/lambda_$(VERSION)_$(DEBARCH)
 
 CPPFLAGS ?=
 CFLAGS ?= -O2 -g
@@ -13,7 +17,7 @@ CFLAGS += -std=c11 -Wall -Wextra -pedantic
 LDFLAGS ?=
 LDLIBS_NCURSES ?= -lncursesw
 
-.PHONY: all install check clean
+.PHONY: all install check deb clean
 
 all: lambda lambda-cli
 
@@ -44,6 +48,28 @@ check: all
 	./lambda-cli --eval '(\x.x) y' | grep -F '→ y'
 	groff -man -Tutf8 lambda.1 >/dev/null
 	groff -man -Tutf8 lambda-cli.1 >/dev/null
+
+deb: all
+	@if ! command -v dpkg-deb >/dev/null 2>&1; then \
+		echo "dpkg-deb is required to build Debian packages"; \
+		exit 1; \
+	fi
+	rm -rf "$(DEBROOT)"
+	$(MAKE) DESTDIR="$(CURDIR)/$(DEBROOT)" PREFIX=/usr install
+	$(INSTALL) -d "$(DEBROOT)/DEBIAN"
+	printf '%s\n' \
+		'Package: lambda' \
+		'Version: $(VERSION)' \
+		'Section: science' \
+		'Priority: optional' \
+		'Architecture: $(DEBARCH)' \
+		'Maintainer: Luke Collins <luke@collins.mt>' \
+		'Depends: libc6, libncursesw6' \
+		'Homepage: https://github.com/drmenguin/lambda' \
+		'Description: Lambda calculus beta-reduction playground' \
+		' lambda includes an interactive ncurses interface and a plain command-line reducer.' \
+		> "$(DEBROOT)/DEBIAN/control"
+	dpkg-deb --build --root-owner-group "$(DEBROOT)" "$(DISTDIR)/lambda_$(VERSION)_$(DEBARCH).deb"
 
 clean:
 	rm -f lambda lambda-cli lambda-ncurses *.o

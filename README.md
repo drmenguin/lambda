@@ -52,7 +52,70 @@ KI, Ki      uppercase-starting names stay as one identifier
 Both backslash and the UTF-8 lambda character are accepted as lambdas.
 
 ## Installation
-Build from source:
+### Arch Linux
+Use the AUR package:
+
+```sh
+yay -S lambda
+```
+
+Or build the package from this repository:
+
+```sh
+makepkg -si
+```
+
+### Ubuntu and Debian
+If a `.deb` package is available for your release, download it and install it
+with apt:
+
+```sh
+sudo apt install ./lambda_0.1.2_amd64.deb
+```
+
+Packagers can build that file on Debian or Ubuntu with:
+
+```sh
+sudo apt install build-essential libncurses-dev dpkg-dev
+make deb
+```
+
+Without a `.deb`, build from source:
+
+```sh
+sudo apt install build-essential libncurses-dev groff
+make
+sudo make PREFIX=/usr install
+```
+
+### Windows
+The easiest route is WSL with Ubuntu, then the Ubuntu instructions above:
+
+```powershell
+wsl --install Ubuntu
+```
+
+For a native Windows build, use an MSYS2 UCRT64 shell:
+
+```sh
+pacman -S --needed git make mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-ncurses
+make
+```
+
+### macOS
+Install Apple's command-line tools, then build from source:
+
+```sh
+xcode-select --install
+make
+sudo make PREFIX=/usr/local install
+```
+
+If your compiler cannot find ncurses, install it with Homebrew and pass its
+include and library paths to `make`.
+
+### Source Builds
+On systems with a C compiler, make, and ncurses:
 
 ```sh
 make
@@ -98,11 +161,12 @@ man lambda-cli
 
 ## Packaging
 This repository includes Arch packaging files for an AUR package named
-`lambda`.
+`lambda`, plus a simple Debian package target.
 
 ```sh
 makepkg --verifysource
 makepkg -f --noarchive
+make deb
 ```
 
 ## Development
