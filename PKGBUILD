@@ -8,7 +8,7 @@ url='https://github.com/drmenguin/lambda'
 license=('GPL-3.0-or-later')
 depends=('glibc' 'ncurses')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('323045f7610643a6bf37031e12c53d78b7db7466db517bfd86cbbaba1447ddc9')
+sha256sums=('0a75f8fed8b265802c39c5d4aa7b59f55855e5a5e7de82df5c6c9067b83da09d')
 
 build() {
   cd "$pkgname-$pkgver"
