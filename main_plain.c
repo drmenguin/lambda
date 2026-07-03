@@ -16,7 +16,7 @@
 
 #define MAX_STEPS 300
 #define LINE_CAP 4096
-#define VERSION "0.1.1"
+#define VERSION "0.1.2"
 
 static int reduce_and_print(const char *source)
 {

@@ -26,7 +26,7 @@
 #define HISTORY_CAP 128
 #define MAX_DEFS 128
 #define MAX_STEPS 300
-#define VERSION "0.1.1"
+#define VERSION "0.1.2"
 
 static int curses_started = 0;
 
