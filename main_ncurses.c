@@ -819,7 +819,7 @@ static int run_interactive(Env *env)
     history.count = 0;
 
     printw("Lambda Calculus Beta Reduction\n");
-    printw("Type backslash to enter λ. Type :help for help, :q to quit.\n\n");
+    printw("Type backslash (\\) to enter λ. Type :help for help, :q to quit.\n\n");
     refresh();
 
     char line[INPUT_CAP];
