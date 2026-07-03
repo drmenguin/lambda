@@ -77,6 +77,12 @@ Term *parse_lambda(const char *source, char *errbuf, size_t errbuf_sz);
 int term_free_in(const char *name, const Term *t);
 
 /*
+   Returns 1 if a and b are alpha-equivalent: the same term up to consistent
+   renaming of bound variables. Free variable names must match exactly.
+*/
+int term_alpha_equivalent(const Term *a, const Term *b);
+
+/*
    Performs one normal-order reduction step.
    The returned term is freshly allocated. If *changed is 0, the returned term
    is just a clone of the input term.

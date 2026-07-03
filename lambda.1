@@ -15,6 +15,10 @@ output and exits.
 .PP
 Expressions use normal-order beta reduction. Backslash and the UTF-8 lambda
 character both introduce abstractions.
+.PP
+When a displayed term is alpha-equivalent to one or more saved definitions,
+.B lambda
+shows those definition names in brackets beside the term.
 .SH OPTIONS
 .TP
 .BI \-d,\ --define\  NAME=TERM
@@ -84,6 +88,14 @@ In the interactive interface, save a definition.
 .B :free I
 Remove the saved definition named
 .BR I .
+.TP
+.B lambda -d 'I=\ex.x' -d 'J=\ey.y' '\ez.z'
+Show that
+.B \ez.z
+is alpha-equivalent to the saved definitions
+.B I
+and
+.BR J .
 .SH SEE ALSO
 .BR lambda-cli (1)
 .SH AUTHORS

@@ -476,6 +476,7 @@ static void print_help(void)
     printw("  I = \\x.x       save a named definition\n");
     printw("  I y            use a named definition\n");
     printw("  :free I        remove a saved definition\n");
+    printw("  [I, J]         shown beside terms alpha-equivalent to saved definitions\n");
     printw("\n");
 }
 
@@ -493,6 +494,101 @@ static void show_defs(const Env *env)
     }
 }
 
+static char *alpha_matches_to_string(const Term *term, const Env *env)
+{
+    size_t cap = 32;
+    size_t len = 0;
+    int any = 0;
+    char *s = malloc(cap);
+    if (!s) {
+        if (curses_started) endwin();
+        fprintf(stderr, "out of memory\n");
+        exit(EXIT_FAILURE);
+    }
+    s[0] = '\0';
+
+    for (size_t i = 0; i < env->count; i++) {
+        if (!term_alpha_equivalent(term, env->items[i].term)) continue;
+
+        const char *name = env->items[i].name;
+        size_t need = len + strlen(name) + (any ? 2 : 1) + 2;
+        if (need > cap) {
+            while (cap < need) cap *= 2;
+            char *new_s = realloc(s, cap);
+            if (!new_s) {
+                free(s);
+                if (curses_started) endwin();
+                fprintf(stderr, "out of memory\n");
+                exit(EXIT_FAILURE);
+            }
+            s = new_s;
+        }
+
+        if (!any) {
+            s[len++] = '[';
+            s[len] = '\0';
+        } else {
+            s[len++] = ',';
+            s[len++] = ' ';
+            s[len] = '\0';
+        }
+
+        memcpy(s + len, name, strlen(name) + 1);
+        len += strlen(name);
+        any = 1;
+    }
+
+    if (!any) return s;
+
+    if (len + 2 > cap) {
+        char *new_s = realloc(s, len + 2);
+        if (!new_s) {
+            free(s);
+            if (curses_started) endwin();
+            fprintf(stderr, "out of memory\n");
+            exit(EXIT_FAILURE);
+        }
+        s = new_s;
+    }
+
+    s[len++] = ']';
+    s[len] = '\0';
+    return s;
+}
+
+static void print_term_with_matches(const char *prefix, const Term *term, const Env *env)
+{
+    char *s = term_to_string(term, 1);
+    char *matches = alpha_matches_to_string(term, env);
+
+    if (matches[0] == '\0' && curses_started) {
+        printw("%s%s\n", prefix, s);
+    } else if (curses_started) {
+        int y, x;
+        int width = getmaxx(stdscr);
+        printw("%s%s", prefix, s);
+        getyx(stdscr, y, x);
+
+        int match_len = (int)strlen(matches);
+        if (x + 1 + match_len < width) {
+            move(y, width - match_len);
+            printw("%s", matches);
+        } else {
+            printw(" %s", matches);
+        }
+        addch('\n');
+    } else {
+        printf("%s%s", prefix, s);
+        if (matches[0] != '\0') {
+            printf("    %s", matches);
+        }
+        putchar('\n');
+    }
+
+    free(matches);
+    free(s);
+}
+
 static void evaluate_and_print(Term *parsed, const Env *env)
 {
     char err[256];
@@ -503,9 +599,7 @@ static void evaluate_and_print(Term *parsed, const Env *env)
     }
 
     Term *current = expanded;
-    char *s = term_to_string(current, 1);
-    printw("  %s\n", s);
-    free(s);
+    print_term_with_matches("  ", current, env);
 
     for (int step = 1; step <= MAX_STEPS; step++) {
         int changed = 0;
@@ -518,9 +612,7 @@ static void evaluate_and_print(Term *parsed, const Env *env)
         term_free(current);
         current = next;
 
-        s = term_to_string(current, 1);
-        printw("→ %s\n", s);
-        free(s);
+        print_term_with_matches("→ ", current, env);
 
         if (step == MAX_STEPS) {
             printw("Stopped after %d steps; term may not have a normal form.\n", MAX_STEPS);
@@ -597,9 +689,7 @@ static int evaluate_source_stdout(const char *source, const Env *env)
         return 1;
     }
 
-    char *s = term_to_string(current, 1);
-    printf("  %s\n", s);
-    free(s);
+    print_term_with_matches("  ", current, env);
 
     for (int step = 1; step <= MAX_STEPS; step++) {
         int changed = 0;
@@ -612,9 +702,7 @@ static int evaluate_source_stdout(const char *source, const Env *env)
         term_free(current);
         current = next;
 
-        s = term_to_string(current, 1);
-        printf("→ %s\n", s);
-        free(s);
+        print_term_with_matches("→ ", current, env);
 
         if (step == MAX_STEPS) {
             printf("Stopped after %d steps; term may not have a normal form.\n", MAX_STEPS);

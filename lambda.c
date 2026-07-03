@@ -531,6 +531,84 @@ static char *fresh_var_avoiding(const Term *a, const Term *b, const char *extra)
     exit(EXIT_FAILURE);
 }
 
+/* Alpha-equivalence ------------------------------------------------------- */
+
+typedef struct {
+    const char *left;
+    const char *right;
+} AlphaBinding;
+
+static int alpha_lookup_left(const AlphaBinding *env, size_t nenv,
+                             const char *left, const char **right)
+{
+    for (size_t i = nenv; i > 0; i--) {
+        if (streq(env[i - 1].left, left)) {
+            *right = env[i - 1].right;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int alpha_lookup_right(const AlphaBinding *env, size_t nenv,
+                              const char *right, const char **left)
+{
+    for (size_t i = nenv; i > 0; i--) {
+        if (streq(env[i - 1].right, right)) {
+            *left = env[i - 1].left;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int alpha_equiv_rec(const Term *a, const Term *b,
+                           AlphaBinding *env, size_t nenv, size_t cap)
+{
+    if (a->type != b->type) return 0;
+
+    switch (a->type) {
+        case TERM_VAR: {
+            const char *mapped_right;
+            const char *mapped_left;
+            int left_bound = alpha_lookup_left(env, nenv, a->as.var.name, &mapped_right);
+            int right_bound = alpha_lookup_right(env, nenv, b->as.var.name, &mapped_left);
+
+            if (left_bound || right_bound) {
+                return left_bound && right_bound &&
+                       streq(mapped_right, b->as.var.name) &&
+                       streq(mapped_left, a->as.var.name);
+            }
+
+            return streq(a->as.var.name, b->as.var.name);
+        }
+
+        case TERM_APP:
+            return alpha_equiv_rec(a->as.app.left, b->as.app.left, env, nenv, cap) &&
+                   alpha_equiv_rec(a->as.app.right, b->as.app.right, env, nenv, cap);
+
+        case TERM_ABS:
+            if (nenv >= cap) {
+                fprintf(stderr, "alpha-equivalence nesting limit exceeded\n");
+                exit(EXIT_FAILURE);
+            }
+            env[nenv].left = a->as.abs.param;
+            env[nenv].right = b->as.abs.param;
+            return alpha_equiv_rec(a->as.abs.body, b->as.abs.body, env, nenv + 1, cap);
+    }
+
+    return 0;
+}
+
+int term_alpha_equivalent(const Term *a, const Term *b)
+{
+    AlphaBinding env[256];
+    if (!a || !b) return 0;
+    return alpha_equiv_rec(a, b, env, 0, sizeof env / sizeof env[0]);
+}
+
 /* Capture-avoiding substitution ------------------------------------------ */
 
 /* Rename occurrences of old_name which are bound by an enclosing abstraction.

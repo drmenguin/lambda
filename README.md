@@ -27,6 +27,17 @@ K = \x y.x
 :free I
 ```
 
+When a displayed term is alpha-equivalent to saved definitions, `lambda` shows
+the matching names beside it:
+
+```sh
+lambda -d 'I=\x.x' -d 'J=\y.y' '\z.z'
+```
+
+```text
+  λz.z    [I, J]
+```
+
 ## Syntax
 ```text
 \x.x        abstraction
