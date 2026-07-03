@@ -511,16 +511,24 @@ static int term_name_occurs(const char *name, const Term *t)
 
 static char *fresh_var_avoiding(const Term *a, const Term *b, const char *extra)
 {
-    static unsigned counter = 0;
     char candidate[64];
+    const char bases[] = "xyzabcdefghijklmnopqrstuvw";
 
-    for (;;) {
-        snprintf(candidate, sizeof candidate, "_v%u", counter++);
-        if (extra && streq(candidate, extra)) continue;
-        if (term_name_occurs(candidate, a)) continue;
-        if (term_name_occurs(candidate, b)) continue;
-        return xstrdup(candidate);
+    for (size_t primes = 0; primes < sizeof candidate - 2; primes++) {
+        for (size_t i = 0; bases[i]; i++) {
+            candidate[0] = bases[i];
+            for (size_t j = 0; j < primes; j++) candidate[j + 1] = '\'';
+            candidate[primes + 1] = '\0';
+
+            if (extra && streq(candidate, extra)) continue;
+            if (term_name_occurs(candidate, a)) continue;
+            if (term_name_occurs(candidate, b)) continue;
+            return xstrdup(candidate);
+        }
     }
+
+    fprintf(stderr, "out of fresh variable names\n");
+    exit(EXIT_FAILURE);
 }
 
 /* Capture-avoiding substitution ------------------------------------------ */

@@ -8,5 +8,6 @@ lambda-ncurses
 /pkg/
 /src/
 /install-root/
+/lambda-*.tar.gz
 /*.pkg.tar.*
 /*.src.tar.*
