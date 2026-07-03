@@ -1,0 +1,111 @@
+# Lambda
+[![CI](https://github.com/drmenguin/lambda/actions/workflows/ci.yml/badge.svg)](https://github.com/drmenguin/lambda/actions/workflows/ci.yml)
+[![License: GPL v3.0](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
+[![AUR](https://img.shields.io/aur/version/lambda?label=AUR)](https://aur.archlinux.org/packages/lambda)
+
+`lambda` is a small lambda calculus beta-reduction playground for the terminal.
+It includes an interactive ncurses interface and a plain command-line reducer.
+
+## What It Does
+Lambda expressions are parsed, printed with Unicode lambda notation, and reduced
+using normal-order beta reduction.
+
+Examples:
+
+```sh
+lambda-cli '(\x.x) y'
+lambda --define 'I=\x.x' --eval 'I y'
+lambda
+```
+
+The interactive interface lets you save definitions:
+
+```text
+I = \x.x
+K = \x y.x
+:defs
+:free I
+```
+
+## Syntax
+```text
+\x.x        abstraction
+x y z       application, left associative: (x y) z
+xx          lowercase letters split into variables: x x
+x1 x2       subscript-style variables, displayed as x₁ x₂
+KI, Ki      uppercase-starting names stay as one identifier
+```
+
+Both backslash and the UTF-8 lambda character are accepted as lambdas.
+
+## Installation
+Build from source:
+
+```sh
+make
+sudo make PREFIX=/usr install
+```
+
+Run local checks:
+
+```sh
+make check
+```
+
+Clean build products:
+
+```sh
+make clean
+```
+
+## Commands
+The ncurses program is installed as `lambda`.
+
+```sh
+lambda                  # start the interactive interface
+lambda '(\x.x) y'       # reduce an expression directly
+lambda -d 'I=\x.x' 'I y'
+lambda --help
+```
+
+The plain command-line front end is installed as `lambda-cli`.
+
+```sh
+lambda-cli '(\x.x) y'
+printf '%s\n' '(\x.x) y' | lambda-cli
+lambda-cli --help
+```
+
+Manual pages are included:
+
+```sh
+man lambda
+man lambda-cli
+```
+
+## Packaging
+This repository includes Arch packaging files for an AUR package named
+`lambda`.
+
+```sh
+makepkg --verifysource
+makepkg -f --noarchive
+```
+
+## Development
+CI runs on GitHub Actions for pushes and pull requests. It builds both
+front ends, runs smoke tests, renders the man pages, and checks the staged
+install image.
+
+Suggestions and patches are welcome through the GitHub repository:
+
+https://github.com/drmenguin/lambda
+
+## Author
+Copyright (C) 2026 Luke Collins.
+
+Website: https://lc.mt
+
+## License
+This project is licensed under the GNU General Public License version 3 or
+later. See [LICENSE](LICENSE).

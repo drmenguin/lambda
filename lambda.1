@@ -1,0 +1,102 @@
+.TH LAMBDA 1 "July 2026" "lambda 0.1.0" "User Commands"
+.\" Copyright (C) 2026 Luke Collins
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.SH NAME
+lambda \- lambda calculus beta-reduction playground
+.SH SYNOPSIS
+.B lambda
+.RI [ OPTION ...]
+.RI [ EXPR ...]
+.SH DESCRIPTION
+.B lambda
+starts an interactive ncurses lambda calculus reducer when no expression is
+given. With one or more expressions, it reduces each expression on standard
+output and exits.
+.PP
+Expressions use normal-order beta reduction. Backslash and the UTF-8 lambda
+character both introduce abstractions.
+.SH OPTIONS
+.TP
+.BI \-d,\ --define\  NAME=TERM
+Save a named definition before reducing expressions. Definitions may be used by
+later expressions in the same invocation.
+.TP
+.BI \-e,\ --eval\  EXPR
+Reduce
+.IR EXPR .
+.TP
+.BI \-f,\ --free\  NAME
+Forget a definition saved earlier in the same invocation.
+.TP
+.B \-h, --help
+Show usage information.
+.TP
+.B \-V, --version
+Show version information.
+.SH INTERACTIVE COMMANDS
+.TP
+.B :defs
+Show saved definitions.
+.TP
+.BI :free\  NAME
+Forget a saved definition, making the name free again.
+.TP
+.B :clear
+Clear the terminal.
+.TP
+.B :help
+Show interactive help.
+.TP
+.B :q
+Quit.
+.SH SYNTAX
+.TP
+.B \ex.x
+Abstraction. In the interactive interface, typing backslash is displayed as
+lambda.
+.TP
+.B x y z
+Application. Application is left associative, so this means
+.BR "(x y) z" .
+.TP
+.B xx
+Lowercase letters split into variables, so this means
+.BR "x x" .
+.TP
+.B x1 x2
+Subscript-style variables. The interactive interface displays them as
+.BR "x\[u2081] x\[u2082]" .
+.TP
+.B KI, Ki
+Uppercase-starting names remain single identifiers and are useful for saved
+definitions.
+.SH EXAMPLES
+.TP
+.B lambda '(\ex.x) y'
+Reduce an expression and print each step.
+.TP
+.B lambda -d 'I=\ex.x' 'I y'
+Save a definition and use it in a later expression.
+.TP
+.B I = \ex.x
+In the interactive interface, save a definition.
+.TP
+.B :free I
+Remove the saved definition named
+.BR I .
+.SH SEE ALSO
+.BR lambda-cli (1)
+.SH AUTHORS
+Written by Luke Collins.
+.PP
+Website:
+.UR https://lc.mt
+.UE
+.PP
+Source and change suggestions:
+.UR https://github.com/drmenguin/lambda
+.UE
+.SH COPYRIGHT
+Copyright (C) 2026 Luke Collins.
+.PP
+License GPLv3+: GNU GPL version 3 or later.

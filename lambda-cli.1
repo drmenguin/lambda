@@ -1,0 +1,66 @@
+.TH LAMBDA-CLI 1 "July 2026" "lambda 0.1.0" "User Commands"
+.\" Copyright (C) 2026 Luke Collins
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.SH NAME
+lambda-cli \- plain command-line lambda calculus beta reducer
+.SH SYNOPSIS
+.B lambda-cli
+.RI [ OPTION ...]
+.RI [ EXPR ...]
+.SH DESCRIPTION
+.B lambda-cli
+reduces lambda calculus expressions from command-line arguments. If no
+expression is supplied, it reads expressions line by line from standard input.
+.PP
+This command is the minimal non-ncurses front end. Use
+.BR lambda (1)
+for the interactive definition table and ncurses interface.
+.SH OPTIONS
+.TP
+.BI \-e,\ --eval\  EXPR
+Reduce
+.IR EXPR .
+.TP
+.B \-h, --help
+Show usage information.
+.TP
+.B \-V, --version
+Show version information.
+.SH SYNTAX
+.TP
+.B \ex.x
+Abstraction. Backslash and the UTF-8 lambda character are both accepted.
+.TP
+.B x y z
+Application. Application is left associative, so this means
+.BR "(x y) z" .
+.TP
+.B xx
+Lowercase letters split into variables, so this means
+.BR "x x" .
+.TP
+.B x1 x2
+Subscript-style variables.
+.SH EXAMPLES
+.TP
+.B lambda-cli '(\ex.x) y'
+Reduce an expression and print each step.
+.TP
+.B printf '%s\en' '(\ex.x) y' | lambda-cli
+Read expressions from standard input.
+.SH SEE ALSO
+.BR lambda (1)
+.SH AUTHORS
+Written by Luke Collins.
+.PP
+Website:
+.UR https://lc.mt
+.UE
+.PP
+Source and change suggestions:
+.UR https://github.com/drmenguin/lambda
+.UE
+.SH COPYRIGHT
+Copyright (C) 2026 Luke Collins.
+.PP
+License GPLv3+: GNU GPL version 3 or later.

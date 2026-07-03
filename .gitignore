@@ -1,0 +1,12 @@
+*.o
+lambda
+lambda-cli
+lambda-ncurses
+
+/old/
+
+/pkg/
+/src/
+/install-root/
+/*.pkg.tar.*
+/*.src.tar.*
