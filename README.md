@@ -66,26 +66,16 @@ makepkg -si
 ```
 
 ### Ubuntu and Debian
-If a `.deb` package is available for your release, download it and install it
-with apt:
+On a fresh Ubuntu or Debian system, run:
 
 ```sh
-sudo apt install ./lambda_0.1.2_amd64.deb
-```
-
-Packagers can build that file on Debian or Ubuntu with:
-
-```sh
-sudo apt install build-essential libncurses-dev dpkg-dev
-make deb
-```
-
-Without a `.deb`, build from source:
-
-```sh
-sudo apt install build-essential libncurses-dev groff
+sudo apt update
+sudo apt install build-essential libncurses-dev groff git
+git clone https://github.com/drmenguin/lambda.git
+cd lambda
 make
 sudo make PREFIX=/usr install
+lambda --version
 ```
 
 ### Windows
@@ -161,12 +151,11 @@ man lambda-cli
 
 ## Packaging
 This repository includes Arch packaging files for an AUR package named
-`lambda`, plus a simple Debian package target.
+`lambda`.
 
 ```sh
 makepkg --verifysource
 makepkg -f --noarchive
-make deb
 ```
 
 ## Development
