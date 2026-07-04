@@ -26,7 +26,7 @@ The interactive interface lets you save definitions:
 I = \x.x
 K = \x y.x
 One <- Succ Zero
-:load church.lc
+:load std
 :def I
 :defs
 :free I
@@ -36,6 +36,8 @@ Use `=` to save a definition lazily. Use `<-` to reduce the expression first
 and save the result. In the interactive interface and in multi-expression
 `lambda` invocations, `%` refers to the previous reduction result.
 Use `:load FILE` or `lambda --load FILE` to import definitions from a file.
+Use `:load std` or `lambda --load std` to load the standard definitions in
+[`std.lc`](std.lc).
 Interactive `:load` accepts quoted paths like `:load "my file.lc"` and
 backslash-escaped spaces like `:load my\ file.lc`. Leading `~/` is expanded
 to your home directory for both `:load` and `lambda --load`. Definition files

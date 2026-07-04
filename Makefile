@@ -2,16 +2,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 CC ?= cc
-VERSION ?= 0.1.10
+VERSION ?= 0.1.11
 PREFIX ?= /usr
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man
+DATADIR ?= $(PREFIX)/share/lambda
 INSTALL ?= install
 DISTDIR ?= dist
 DEBARCH ?= $(shell dpkg --print-architecture 2>/dev/null || echo amd64)
 DEBROOT := $(DISTDIR)/lambda_$(VERSION)_$(DEBARCH)
 
 CPPFLAGS ?=
+CPPFLAGS += -DLAMBDA_DATADIR=\"$(DATADIR)\"
 CFLAGS ?= -O2 -g
 CFLAGS += -std=c11 -Wall -Wextra -pedantic
 LDFLAGS ?=
@@ -37,6 +39,8 @@ install: all
 	$(INSTALL) -d "$(DESTDIR)$(MANDIR)/man1"
 	$(INSTALL) -m 0644 lambda.1 "$(DESTDIR)$(MANDIR)/man1/lambda.1"
 	$(INSTALL) -m 0644 lambda-cli.1 "$(DESTDIR)$(MANDIR)/man1/lambda-cli.1"
+	$(INSTALL) -d "$(DESTDIR)$(DATADIR)"
+	$(INSTALL) -m 0644 std.lc "$(DESTDIR)$(DATADIR)/std.lc"
 
 check: all
 	./lambda --version
@@ -56,6 +60,7 @@ check: all
 	./lambda '(\x.x) y' '%' | grep -F '  y'
 	./lambda '(\x.x) y' --define 'Saved=%' Saved | grep -F '  y    [Saved]'
 	./lambda '(\x.x) y' --define 'Saved<-%' Saved | grep -F '  y    [Saved]'
+	./lambda --load std 'I y' | grep -F '→ᵦ y'
 	./lambda-cli --eval '(\x.x) y' | grep -F '→ᵦ y'
 	groff -man -Tutf8 lambda.1 >/dev/null
 	groff -man -Tutf8 lambda-cli.1 >/dev/null

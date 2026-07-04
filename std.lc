@@ -1,0 +1,81 @@
+# Standard lambda calculus definitions for lambda.
+#
+# Load with:
+#   :load std
+# or:
+#   lambda --load std
+
+# Combinators
+I=\x.x
+K=\x y.x
+S=\x y z.x z (y z)
+B=\f g x.f (g x)
+C=\f x y.f y x
+W=\f x.f x x
+
+#Logic
+True = \lr.l
+False = \lr.r
+If = I
+And = \bc.bc False
+Or = \bc.b True c
+Not = \b.b False True
+
+# Numbers (Church Numerals)
+Zero = \fx.x
+Succ = \nfx.f(nfx)
+IsZero = \n.n(\x.False)True
+
+One <- Succ Zero
+Two <- Succ One
+Three <- Succ Two
+Four <- Succ Three
+Five <- Succ Four
+Six <- Succ Five
+Seven <- Succ Six
+Eight <- Succ Seven
+Nine <- Succ Eight
+Ten <- Succ Nine
+Eleven <- Succ Ten
+Twelve <- Succ Eleven
+
+# Operations
+Add = \mnfx.mf(nfx)
+Mul = \mnf.m(nf)
+Exp = \mn.nm
+
+# Pairs
+Pair = \lrp.plr
+Fst = \p.p True
+Snd = \p.p False
+
+# Lists
+Nil = Pair True I
+Cons = \xy.Pair False(Pair xy)
+IsNil = Fst
+Head = \l.Fst(Snd l)
+Tail = \l.Snd(Snd l)
+
+# Predecessor
+Phi = \p.Pair (Snd p) (Succ(Snd p))
+Pre = \n.Fst(n Phi (Pair Zero Zero))
+
+# Subtraction and Equality
+Sub = \mn.n Pre m
+Leq = \mn.IsZero(Sub mn)
+Eq  = \mn.And(Leq mn)(Leq nm)
+
+# Y combinator
+Y = \f.(\x.f(xx))(\x.f(xx))
+
+# Recursive Definitions (Numbers)
+Add' = Y\g.\mn.If (IsZero n) m (Succ(gm(Pre n)))
+Sub' = Y\g.\mn.If (IsZero n) m (Pre(gm(Pre n)))
+Eq'  = Y\g.\mn.If (And (IsZero m) (IsZero n)) True (If (Or (IsZero m) (IsZero n)) False (g (Pre m) (Pre n)))
+
+# Recursive Definitions (Lists)
+Foldr = Y\g.\fzl.If (IsNil l) z (f (Head l) (g f z (Tail l)))
+Sum = Foldr Add Zero
+Append = \kl.Foldr Cons l k
+Map = \fl.Foldr (\xa.Cons (f x) a) Nil l
+Length = \l.Foldr (\xn.Succ n) Zero l

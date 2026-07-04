@@ -1,6 +1,6 @@
 # Maintainer: Luke
 pkgname=lambda
-pkgver=0.1.10
+pkgver=0.1.11
 pkgrel=1
 pkgdesc='Lambda calculus beta-reduction playground with ncurses and CLI front ends'
 arch=('x86_64')

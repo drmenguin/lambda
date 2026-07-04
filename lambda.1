@@ -1,4 +1,4 @@
-.TH LAMBDA 1 "July 2026" "lambda 0.1.10" "User Commands"
+.TH LAMBDA 1 "July 2026" "lambda 0.1.11" "User Commands"
 .\" Copyright (C) 2026 Luke Collins
 .\" SPDX-License-Identifier: GPL-3.0-or-later
 .SH NAME
@@ -48,6 +48,10 @@ Forget a definition saved earlier in the same invocation.
 .BI \-l,\ --load\  FILE
 Load definitions from
 .IR FILE .
+Use
+.B --load std
+to load the standard definitions from
+.BR std.lc .
 The file is read line by line; blank lines and lines starting with
 .B #
 are ignored.
@@ -78,6 +82,10 @@ Load definitions from
 without printing each imported definition. After loading, use
 .B :defs
 to see manual definitions first and loaded definitions grouped by filename.
+Use
+.B :load std
+to load the standard definitions from
+.BR std.lc .
 Quoted paths and backslash escapes are accepted, for example
 .B ":load \(dqmy file.lc\(dq"
 or
@@ -147,9 +155,9 @@ In the interactive interface, save a lazy definition.
 In the interactive interface, reduce first and save the result as
 .BR I .
 .TP
-.B :load church.lc
+.B :load std
 Import definitions from
-.BR church.lc .
+.BR std.lc .
 .TP
 .B :def I
 Show the saved definition named

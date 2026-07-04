@@ -16,7 +16,7 @@
 
 #define MAX_STEPS 300
 #define LINE_CAP 4096
-#define VERSION "0.1.10"
+#define VERSION "0.1.11"
 #define STEP_PREFIX "→ᵦ "
 
 static int reduce_and_print(const char *source)

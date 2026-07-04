@@ -30,8 +30,11 @@
 #define SCROLLBACK_CAP 4096
 #define MAX_DEFS 128
 #define MAX_STEPS 300
-#define VERSION "0.1.10"
+#define VERSION "0.1.11"
 #define STEP_PREFIX "→ᵦ "
+#ifndef LAMBDA_DATADIR
+#define LAMBDA_DATADIR "/usr/share/lambda"
+#endif
 
 static int curses_started = 0;
 
@@ -807,6 +810,10 @@ static int parse_load_path_arg(char *arg, char **path, char *err, size_t errsz)
 
 static char *expand_load_path(const char *path, char *err, size_t errsz)
 {
+    if (strcmp(path, "std") == 0) {
+        return xstrdup_main("std.lc");
+    }
+
     if (path[0] != '~' || (path[1] != '\0' && path[1] != '/')) {
         return xstrdup_main(path);
     }
@@ -829,6 +836,23 @@ static char *expand_load_path(const char *path, char *err, size_t errsz)
     memcpy(expanded, home, home_len);
     memcpy(expanded + home_len, path + 1, rest_len + 1);
     return expanded;
+}
+
+static char *standard_library_path(void)
+{
+    const char suffix[] = "/std.lc";
+    size_t base_len = strlen(LAMBDA_DATADIR);
+    size_t suffix_len = strlen(suffix);
+    char *path = malloc(base_len + suffix_len + 1);
+    if (!path) {
+        if (curses_started) endwin();
+        fprintf(stderr, "out of memory\n");
+        exit(EXIT_FAILURE);
+    }
+
+    memcpy(path, LAMBDA_DATADIR, base_len);
+    memcpy(path + base_len, suffix, suffix_len + 1);
+    return path;
 }
 
 static int valid_def_name(const char *s)
@@ -1099,6 +1123,7 @@ static void print_help(void)
     output_printf("  :defs          show all saved definitions\n");
     output_printf("  :free NAME     forget a saved definition\n");
     output_printf("  :load FILE     load definitions from FILE\n");
+    output_printf("  :load std      load the standard definitions from std.lc\n");
     output_printf("  :help          show this help\n");
     output_printf("  :version       show version information\n");
     output_printf("\n");
@@ -1449,8 +1474,18 @@ static int load_definitions_from_file(Env *env, const char *path,
     if (!open_path) return 0;
 
     FILE *f = fopen(open_path, "r");
+    if (!f && strcmp(path, "std") == 0) {
+        char *installed_path = standard_library_path();
+        f = fopen(installed_path, "r");
+        if (f) {
+            free(open_path);
+            open_path = installed_path;
+        } else {
+            free(installed_path);
+        }
+    }
     if (!f) {
-        snprintf(err, errsz, "%s: %s", path, strerror(errno));
+        snprintf(err, errsz, "%s: %s", open_path, strerror(errno));
         free(open_path);
         return 0;
     }
@@ -1574,6 +1609,7 @@ static void print_usage(FILE *out, const char *prog)
     fprintf(out, "  -e, --eval EXPR         reduce EXPR\n");
     fprintf(out, "  -f, --free NAME         forget a saved command-line definition\n");
     fprintf(out, "  -l, --load FILE         load definitions from FILE\n");
+    fprintf(out, "                          use --load std for std.lc\n");
     fprintf(out, "  -h, --help              show this help\n");
     fprintf(out, "  -V, --version           show version information\n");
     fprintf(out, "\n");
