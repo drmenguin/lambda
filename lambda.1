@@ -1,4 +1,4 @@
-.TH LAMBDA 1 "July 2026" "lambda 0.1.7" "User Commands"
+.TH LAMBDA 1 "July 2026" "lambda 0.1.9" "User Commands"
 .\" Copyright (C) 2026 Luke Collins
 .\" SPDX-License-Identifier: GPL-3.0-or-later
 .SH NAME
@@ -23,6 +23,9 @@ shows those definition names in brackets beside the term.
 If a name is followed by
 .BR * ,
 the saved definition reduces to the displayed term.
+When evaluating a saved name,
+.B lambda
+shows the saved expression before recursively expanding it and reducing.
 .SH OPTIONS
 .TP
 .BI \-d,\ --define\  NAME=TERM
@@ -58,6 +61,13 @@ Show version information.
 .TP
 .B :defs
 Show saved definitions.
+.TP
+.BI :def\  NAME
+Show the saved definition named
+.IR NAME
+without expanding it. For eager definitions saved with
+.BR <- ,
+also show the original expression as it was defined.
 .TP
 .BI :free\  NAME
 Forget a saved definition, making the name free again.
@@ -130,6 +140,10 @@ In the interactive interface, reduce first and save the result as
 .B :load church.lc
 Import definitions from
 .BR church.lc .
+.TP
+.B :def I
+Show the saved definition named
+.BR I .
 .TP
 .B :free I
 Remove the saved definition named

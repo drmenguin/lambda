@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 CC ?= cc
-VERSION ?= 0.1.7
+VERSION ?= 0.1.9
 PREFIX ?= /usr
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man
@@ -43,6 +43,7 @@ check: all
 	./lambda-cli --version
 	./lambda --define 'I=\x.x' --eval 'I y' | grep -F '→ᵦ y'
 	./lambda-cli --eval '(\x.x) \y.y' | grep -F '→ᵦ λy.y'
+	./lambda -d 'One=Succ Zero' One | grep -F '  Succ Zero    [One]'
 	./lambda --define 'I=\x.x' --free I --eval 'I y' | grep -F 'I y'
 	./lambda --eval '(\x y.x y) y' | grep -F 'λz.y z'
 	./lambda --define 'I=\x.x' --define 'J=\y.y' --eval '\z.z' | grep -F 'λz.z    [I, J]'

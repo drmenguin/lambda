@@ -27,6 +27,7 @@ I = \x.x
 K = \x y.x
 One <- Succ Zero
 :load church.lc
+:def I
 :defs
 :free I
 ```
@@ -39,10 +40,14 @@ Interactive `:load` accepts quoted paths like `:load "my file.lc"` and
 backslash-escaped spaces like `:load my\ file.lc`. Definition files are read
 line by line; blank lines and lines starting with `#` are ignored. Loaded
 definitions are grouped by filename in `:defs`.
+Use `:def NAME` to show one saved definition without expanding it; eager
+definitions also show the original expression they were reduced from.
 
 When a displayed term is alpha-equivalent to saved definitions, `lambda` shows
 the matching names beside it. A `*` means the saved definition reduces to the
 displayed term:
+When evaluating a saved name, `lambda` shows the saved expression before
+recursively expanding it and reducing.
 
 ```sh
 lambda -d 'I=\x.x' -d 'J=\y.y' '\z.z'

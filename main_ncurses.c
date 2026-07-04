@@ -27,7 +27,7 @@
 #define HISTORY_CAP 128
 #define MAX_DEFS 128
 #define MAX_STEPS 300
-#define VERSION "0.1.7"
+#define VERSION "0.1.9"
 #define STEP_PREFIX "→ᵦ "
 
 static int curses_started = 0;
@@ -35,6 +35,8 @@ static int curses_started = 0;
 typedef struct {
     char *name;
     char *source;
+    char *original_rhs;
+    int reduced_first;
     Term *term;
     Term *normal;
     int normal_stopped;
@@ -94,6 +96,7 @@ static void env_free(Env *env)
     for (size_t i = 0; i < env->count; i++) {
         free(env->items[i].name);
         free(env->items[i].source);
+        free(env->items[i].original_rhs);
         term_free(env->items[i].term);
         term_free(env->items[i].normal);
     }
@@ -107,17 +110,22 @@ static ssize_t env_find(const Env *env, const char *name)
     return -1;
 }
 
-static int env_set_raw(Env *env, const char *name, Term *term, const char *source)
+static int env_set_raw(Env *env, const char *name, Term *term,
+                       const char *source, const char *original_rhs,
+                       int reduced_first)
 {
     ssize_t i = env_find(env, name);
     if (i >= 0) {
         term_free(env->items[i].term);
         term_free(env->items[i].normal);
         free(env->items[i].source);
+        free(env->items[i].original_rhs);
         env->items[i].term = term;
         env->items[i].normal = NULL;
         env->items[i].normal_stopped = 0;
         env->items[i].source = source ? xstrdup_main(source) : NULL;
+        env->items[i].original_rhs = original_rhs ? xstrdup_main(original_rhs) : NULL;
+        env->items[i].reduced_first = reduced_first;
         return 1;
     }
 
@@ -128,6 +136,8 @@ static int env_set_raw(Env *env, const char *name, Term *term, const char *sourc
 
     env->items[env->count].name = xstrdup_main(name);
     env->items[env->count].source = source ? xstrdup_main(source) : NULL;
+    env->items[env->count].original_rhs = original_rhs ? xstrdup_main(original_rhs) : NULL;
+    env->items[env->count].reduced_first = reduced_first;
     env->items[env->count].term = term;
     env->items[env->count].normal = NULL;
     env->items[env->count].normal_stopped = 0;
@@ -143,6 +153,7 @@ static int env_remove(Env *env, const char *name)
     size_t i = (size_t)idx;
     free(env->items[i].name);
     free(env->items[i].source);
+    free(env->items[i].original_rhs);
     term_free(env->items[i].term);
     term_free(env->items[i].normal);
 
@@ -243,6 +254,81 @@ static Term *expand_defs(const Term *t, const Env *env, const Term *last_output,
     const char *expanding[1];
     if (err && errsz) err[0] = '\0';
     return expand_defs_rec(t, env, last_output, bound, 0, expanding, 0, err, errsz);
+}
+
+static Term *expand_defs_shallow_rec(const Term *t, const Env *env,
+                                     const Term *last_output,
+                                     const char **bound, size_t nbound,
+                                     int *changed, char *err, size_t errsz)
+{
+    switch (t->type) {
+        case TERM_VAR: {
+            const char *name = t->as.var.name;
+
+            if (name_in_list(name, bound, nbound)) {
+                return term_clone(t);
+            }
+
+            if (strcmp(name, "%") == 0) {
+                if (!last_output) {
+                    snprintf(err, errsz, "no previous reduction for '%%'");
+                    return NULL;
+                }
+                if (changed) *changed = 1;
+                return term_clone(last_output);
+            }
+
+            ssize_t idx = env_find(env, name);
+            if (idx < 0) {
+                return term_clone(t);
+            }
+
+            if (changed) *changed = 1;
+            return term_clone(env->items[idx].term);
+        }
+
+        case TERM_APP: {
+            Term *l = expand_defs_shallow_rec(t->as.app.left, env, last_output,
+                                              bound, nbound, changed, err, errsz);
+            if (!l) return NULL;
+            Term *r = expand_defs_shallow_rec(t->as.app.right, env, last_output,
+                                              bound, nbound, changed, err, errsz);
+            if (!r) {
+                term_free(l);
+                return NULL;
+            }
+            return term_app(l, r);
+        }
+
+        case TERM_ABS: {
+            const char *new_bound[256];
+            if (nbound >= 256) {
+                snprintf(err, errsz, "too many nested binders");
+                return NULL;
+            }
+            for (size_t i = 0; i < nbound; i++) new_bound[i] = bound[i];
+            new_bound[nbound] = t->as.abs.param;
+
+            Term *body = expand_defs_shallow_rec(t->as.abs.body, env, last_output,
+                                                 new_bound, nbound + 1,
+                                                 changed, err, errsz);
+            if (!body) return NULL;
+            return term_abs(t->as.abs.param, body);
+        }
+    }
+
+    return NULL;
+}
+
+static Term *expand_defs_shallow(const Term *t, const Env *env,
+                                 const Term *last_output,
+                                 int *changed, char *err, size_t errsz)
+{
+    const char *bound[1];
+    if (changed) *changed = 0;
+    if (err && errsz) err[0] = '\0';
+    return expand_defs_shallow_rec(t, env, last_output, bound, 0,
+                                   changed, err, errsz);
 }
 
 static Term *reduce_expanded_normal_form(const Term *t, const Env *env,
@@ -568,7 +654,8 @@ static void print_help(void)
     printw("Commands:\n");
     printw("  :q             quit\n");
     printw("  :clear         clear the terminal\n");
-    printw("  :defs          show definitions\n");
+    printw("  :def NAME      show how a saved definition is defined\n");
+    printw("  :defs          show all saved definitions\n");
     printw("  :free NAME     forget a saved definition\n");
     printw("  :load FILE     load definitions from FILE\n");
     printw("  :help          show this help\n");
@@ -591,9 +678,8 @@ static void print_help(void)
     printw("  M <- (\\x.x) y  reduce first, then save the result as M\n");
     printw("  %%              previous reduction result\n");
     printw("  M y            use a named definition\n");
+    printw("  :def M         show how M is defined\n");
     printw("  :free M        remove a saved definition\n");
-    printw("  :load defs.lc  import definitions from the file defs.lc\n");
-    printw("  :load \"my file.lc\"  quote or backslash-escape spaces in paths\n");
     printw("\n");
     printw("Other:\n");
     printw("  [M, N]         shown beside terms alpha-equivalent to saved definitions\n");
@@ -606,6 +692,23 @@ static void print_definition(const Definition *def, const char *indent)
     char *s = term_to_string(def->term, 1);
     printw("%s%s = %s\n", indent, def->name, s);
     free(s);
+}
+
+static void show_def(const Env *env, const char *name)
+{
+    ssize_t idx = env_find(env, name);
+    if (idx < 0) {
+        printw("No definition named %s.\n", name);
+        return;
+    }
+
+    const Definition *def = &env->items[idx];
+    if (def->reduced_first) {
+        printw("%s <- %s  (as defined)\n",
+               def->name, def->original_rhs ? def->original_rhs : "");
+    }
+
+    print_definition(def, "");
 }
 
 static int source_seen_before(const Env *env, size_t idx)
@@ -763,14 +866,33 @@ static int evaluate_and_print(Term *parsed, const Env *env,
                               const Term *last_output, Term **out_final)
 {
     char err[256];
-    Term *expanded = expand_defs(parsed, env, last_output, err, sizeof err);
-    if (!expanded) {
+
+    int shallow_changed = 0;
+    Term *shallow = expand_defs_shallow(parsed, env, last_output,
+                                        &shallow_changed, err, sizeof err);
+    if (!shallow) {
         printw("Expansion error: %s\n", err);
         return 0;
     }
 
+    Term *expanded = expand_defs(parsed, env, last_output, err, sizeof err);
+    if (!expanded) {
+        printw("Expansion error: %s\n", err);
+        term_free(shallow);
+        return 0;
+    }
+
     Term *current = expanded;
-    print_term_with_matches("  ", current, env);
+    if (shallow_changed) {
+        print_term_with_matches("  ", shallow, env);
+    } else {
+        print_term_with_matches("  ", current, env);
+    }
+
+    if (shallow_changed && !term_alpha_equivalent(shallow, current)) {
+        print_term_with_matches(STEP_PREFIX, current, env);
+    }
+    term_free(shallow);
 
     for (int step = 1; step <= MAX_STEPS; step++) {
         int changed = 0;
@@ -840,7 +962,7 @@ static int save_definition_from_input(Env *env, char *input, char *err, size_t e
         *stopped_early = 0;
     }
 
-    if (!env_set_raw(env, name, t, source)) {
+    if (!env_set_raw(env, name, t, source, rhs, reduce_first)) {
         snprintf(err, errsz, "too many definitions; cannot add %s", name);
         return 0;
     }
@@ -928,15 +1050,36 @@ static int evaluate_source_stdout(const char *source, Env *env, Term **last_outp
         return 1;
     }
 
-    Term *current = expand_defs(parsed, env, last_output ? *last_output : NULL,
-                                err, sizeof err);
-    term_free(parsed);
-    if (!current) {
+    int shallow_changed = 0;
+    Term *shallow = expand_defs_shallow(parsed, env,
+                                        last_output ? *last_output : NULL,
+                                        &shallow_changed, err, sizeof err);
+    if (!shallow) {
         fprintf(stderr, "Expansion error: %s\n", err);
+        term_free(parsed);
         return 1;
     }
 
-    print_term_with_matches("  ", current, env);
+    Term *current = expand_defs(parsed, env, last_output ? *last_output : NULL,
+                                err, sizeof err);
+    if (!current) {
+        fprintf(stderr, "Expansion error: %s\n", err);
+        term_free(shallow);
+        term_free(parsed);
+        return 1;
+    }
+
+    if (shallow_changed) {
+        print_term_with_matches("  ", shallow, env);
+    } else {
+        print_term_with_matches("  ", current, env);
+    }
+
+    if (shallow_changed && !term_alpha_equivalent(shallow, current)) {
+        print_term_with_matches(STEP_PREFIX, current, env);
+    }
+    term_free(shallow);
+    term_free(parsed);
 
     for (int step = 1; step <= MAX_STEPS; step++) {
         int changed = 0;
@@ -982,7 +1125,7 @@ static void print_usage(FILE *out, const char *prog)
     fprintf(out, "  -h, --help              show this help\n");
     fprintf(out, "  -V, --version           show version information\n");
     fprintf(out, "\n");
-    fprintf(out, "Interactive commands include :defs, :free NAME, :load FILE, :version, :clear, :help, and :q.\n");
+    fprintf(out, "Interactive commands include :def NAME, :defs, :free NAME, :load FILE, :version, :clear, :help, and :q.\n");
 }
 
 static int missing_arg(const char *option)
@@ -1154,6 +1297,24 @@ static int run_interactive(Env *env)
 
         if (strcmp(input, ":defs") == 0) {
             show_defs(env);
+            continue;
+        }
+
+        if (strncmp(input, ":def", 4) == 0 &&
+            (input[4] == '\0' || isspace((unsigned char)input[4]))) {
+            char *name = trim_in_place(input + 4);
+
+            if (*name == '\0') {
+                printw("Usage: :def NAME\n");
+                continue;
+            }
+
+            if (!valid_def_name(name)) {
+                printw("Invalid definition name: %s\n", name);
+                continue;
+            }
+
+            show_def(env, name);
             continue;
         }
 
