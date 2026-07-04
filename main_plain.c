@@ -16,8 +16,8 @@
 
 #define MAX_STEPS 300
 #define LINE_CAP 4096
-#define VERSION "0.1.4"
-#define STEP_PREFIX "⟶ᵦ "
+#define VERSION "0.1.5"
+#define STEP_PREFIX "→ᵦ "
 
 static int reduce_and_print(const char *source)
 {
@@ -61,7 +61,7 @@ static void print_usage(FILE *out, const char *prog)
     fprintf(out, "Usage: %s [OPTION...] [EXPR...]\n", prog);
     fprintf(out, "\n");
     fprintf(out, "Reduce lambda calculus expressions from arguments or standard input.\n");
-    fprintf(out, "Reduction uses normal-order beta reduction; steps are shown with ⟶ᵦ.\n");
+    fprintf(out, "Reduction uses normal-order beta reduction; steps are shown with →ᵦ.\n");
     fprintf(out, "\n");
     fprintf(out, "Options:\n");
     fprintf(out, "  -e, --eval EXPR  reduce EXPR\n");

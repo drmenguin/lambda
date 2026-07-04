@@ -1,4 +1,4 @@
-.TH LAMBDA 1 "July 2026" "lambda 0.1.4" "User Commands"
+.TH LAMBDA 1 "July 2026" "lambda 0.1.5" "User Commands"
 .\" Copyright (C) 2026 Luke Collins
 .\" SPDX-License-Identifier: GPL-3.0-or-later
 .SH NAME
@@ -14,7 +14,7 @@ given. With one or more expressions, it reduces each expression on standard
 output and exits.
 .PP
 Expressions use normal-order beta reduction. Reduction steps are marked with
-.BR ⟶ᵦ .
+.BR →ᵦ .
 Backslash and the UTF-8 lambda character both introduce abstractions.
 .PP
 When a displayed term is alpha-equivalent to one or more saved definitions,
@@ -42,6 +42,13 @@ Reduce
 .BI \-f,\ --free\  NAME
 Forget a definition saved earlier in the same invocation.
 .TP
+.BI \-l,\ --load\  FILE
+Load definitions from
+.IR FILE .
+The file is read line by line; blank lines and lines starting with
+.B #
+are ignored.
+.TP
 .B \-h, --help
 Show usage information.
 .TP
@@ -54,6 +61,13 @@ Show saved definitions.
 .TP
 .BI :free\  NAME
 Forget a saved definition, making the name free again.
+.TP
+.BI :load\  FILE
+Load definitions from
+.IR FILE
+without printing each imported definition. After loading, use
+.B :defs
+to see manual definitions first and loaded definitions grouped by filename.
 .TP
 .B :clear
 Clear the terminal.
@@ -104,6 +118,10 @@ In the interactive interface, save a lazy definition.
 .B I <- (\ex.x) y
 In the interactive interface, reduce first and save the result as
 .BR I .
+.TP
+.B :load church.lc
+Import definitions from
+.BR church.lc .
 .TP
 .B :free I
 Remove the saved definition named

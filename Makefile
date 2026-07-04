@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 CC ?= cc
-VERSION ?= 0.1.4
+VERSION ?= 0.1.5
 PREFIX ?= /usr
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man
@@ -41,14 +41,18 @@ install: all
 check: all
 	./lambda --version
 	./lambda-cli --version
-	./lambda --define 'I=\x.x' --eval 'I y' | grep -F '⟶ᵦ y'
+	./lambda --define 'I=\x.x' --eval 'I y' | grep -F '→ᵦ y'
 	./lambda --define 'I=\x.x' --free I --eval 'I y' | grep -F 'I y'
 	./lambda --eval '(\x y.x y) y' | grep -F 'λz.y z'
 	./lambda --define 'I=\x.x' --define 'J=\y.y' --eval '\z.z' | grep -F 'λz.z    [I, J]'
 	./lambda -d 'Zero=\f x.x' -d 'Succ=\n f x.f (n f x)' -d 'One=Succ Zero' '\f x.f x' | grep -F 'λf x.f x    [One*]'
 	./lambda -d 'Zero=\f x.x' -d 'Succ=\n f x.f (n f x)' -d 'One<-Succ Zero' '\f x.f x' | grep -F 'λf x.f x    [One]'
+	tmpfile="$$(mktemp)"; \
+		printf '%s\n' 'Zero=\f x.x' 'Succ=\n f x.f (n f x)' 'One=Succ Zero' > "$$tmpfile"; \
+		./lambda --load "$$tmpfile" '\f x.f x' | grep -F 'λf x.f x    [One*]'; \
+		rm -f "$$tmpfile"
 	./lambda '(\x.x) y' '%' | grep -F '  y'
-	./lambda-cli --eval '(\x.x) y' | grep -F '⟶ᵦ y'
+	./lambda-cli --eval '(\x.x) y' | grep -F '→ᵦ y'
 	groff -man -Tutf8 lambda.1 >/dev/null
 	groff -man -Tutf8 lambda-cli.1 >/dev/null
 

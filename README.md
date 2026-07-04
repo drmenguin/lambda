@@ -10,7 +10,7 @@ It includes an interactive ncurses interface and a plain command-line reducer.
 
 ## What It Does
 Lambda expressions are parsed, printed with Unicode lambda notation, and reduced
-using normal-order beta reduction. Reduction steps are marked with `⟶ᵦ`.
+using normal-order beta reduction. Reduction steps are marked with `→ᵦ`.
 
 Examples:
 
@@ -26,6 +26,7 @@ The interactive interface lets you save definitions:
 I = \x.x
 K = \x y.x
 One <- Succ Zero
+:load church.lc
 :defs
 :free I
 ```
@@ -33,6 +34,9 @@ One <- Succ Zero
 Use `=` to save a definition lazily. Use `<-` to reduce the expression first
 and save the result. In the interactive interface and in multi-expression
 `lambda` invocations, `%` refers to the previous reduction result.
+Use `:load FILE` or `lambda --load FILE` to import definitions from a file.
+Definition files are read line by line; blank lines and lines starting with `#`
+are ignored. Loaded definitions are grouped by filename in `:defs`.
 
 When a displayed term is alpha-equivalent to saved definitions, `lambda` shows
 the matching names beside it. A `*` means the saved definition reduces to the

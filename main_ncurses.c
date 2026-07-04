@@ -15,6 +15,7 @@
 #include <ctype.h>
 #include <locale.h>
 #include <curses.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,13 +27,14 @@
 #define HISTORY_CAP 128
 #define MAX_DEFS 128
 #define MAX_STEPS 300
-#define VERSION "0.1.4"
-#define STEP_PREFIX "⟶ᵦ "
+#define VERSION "0.1.5"
+#define STEP_PREFIX "→ᵦ "
 
 static int curses_started = 0;
 
 typedef struct {
     char *name;
+    char *source;
     Term *term;
     Term *normal;
     int normal_stopped;
@@ -91,6 +93,7 @@ static void env_free(Env *env)
 {
     for (size_t i = 0; i < env->count; i++) {
         free(env->items[i].name);
+        free(env->items[i].source);
         term_free(env->items[i].term);
         term_free(env->items[i].normal);
     }
@@ -104,15 +107,17 @@ static ssize_t env_find(const Env *env, const char *name)
     return -1;
 }
 
-static int env_set_raw(Env *env, const char *name, Term *term)
+static int env_set_raw(Env *env, const char *name, Term *term, const char *source)
 {
     ssize_t i = env_find(env, name);
     if (i >= 0) {
         term_free(env->items[i].term);
         term_free(env->items[i].normal);
+        free(env->items[i].source);
         env->items[i].term = term;
         env->items[i].normal = NULL;
         env->items[i].normal_stopped = 0;
+        env->items[i].source = source ? xstrdup_main(source) : NULL;
         return 1;
     }
 
@@ -122,6 +127,7 @@ static int env_set_raw(Env *env, const char *name, Term *term)
     }
 
     env->items[env->count].name = xstrdup_main(name);
+    env->items[env->count].source = source ? xstrdup_main(source) : NULL;
     env->items[env->count].term = term;
     env->items[env->count].normal = NULL;
     env->items[env->count].normal_stopped = 0;
@@ -136,6 +142,7 @@ static int env_remove(Env *env, const char *name)
 
     size_t i = (size_t)idx;
     free(env->items[i].name);
+    free(env->items[i].source);
     term_free(env->items[i].term);
     term_free(env->items[i].normal);
 
@@ -506,11 +513,13 @@ static int read_lambda_line(const char *prompt, char *buf, size_t cap,
 
 static void print_help(void)
 {
+    printw("Reduction uses normal-order beta reduction; steps are shown with →ᵦ\n\n");
     printw("Commands:\n");
     printw("  :q             quit\n");
     printw("  :clear         clear the terminal\n");
     printw("  :defs          show definitions\n");
     printw("  :free NAME     forget a saved definition\n");
+    printw("  :load FILE     load definitions from FILE\n");
     printw("  :help          show this help\n");
     printw("  :version       show version information\n");
     printw("\n");
@@ -520,21 +529,44 @@ static void print_help(void)
     printw("  Home/End       jump to start/end of input\n");
     printw("\n");
     printw("Syntax:\n");
-    printw("  Reduction uses normal-order beta reduction; steps are shown with ⟶ᵦ\n");
     printw("  \\x.x           abstraction; displayed as λx.x while typing\n");
     printw("  x y z          application; left associative: (x y) z\n");
     printw("  xx             same as x x; lowercase letters split into variables\n");
     printw("  x1 x2          subscripted variables; displayed as x₁ x₂\n");
     printw("  KI, Ki         uppercase-starting names stay as one identifier\n");
     printw("  (\\x.x) y       beta-reduces to y\n");
-    printw("  I = \\x.x       save a named definition\n");
-    printw("  I <- (\\x.x) y  reduce first, then save the result as I\n");
+    printw("  M = \\x.x       save a named definition\n");
+    printw("  M <- (\\x.x) y  reduce first, then save the result as M\n");
     printw("  %%              previous reduction result\n");
-    printw("  I y            use a named definition\n");
-    printw("  :free I        remove a saved definition\n");
-    printw("  [I, J]         shown beside terms alpha-equivalent to saved definitions\n");
-    printw("  [I*]           I reduces to the displayed term\n");
+    printw("  M y            use a named definition\n");
+    printw("  :free M        remove a saved definition\n");
+    printw("  :load defs.lc  import definitions without printing each one\n");
     printw("\n");
+    printw("Other:\n");
+    printw("  [M, N]         shown beside terms alpha-equivalent to saved definitions\n");
+    printw("  [M*]           M reduces to the displayed term\n");
+    printw("\n");
+}
+
+static void print_definition(const Definition *def, const char *indent)
+{
+    char *s = term_to_string(def->term, 1);
+    printw("%s%s = %s\n", indent, def->name, s);
+    free(s);
+}
+
+static int source_seen_before(const Env *env, size_t idx)
+{
+    const char *source = env->items[idx].source;
+    if (!source) return 0;
+
+    for (size_t i = 0; i < idx; i++) {
+        if (env->items[i].source && strcmp(env->items[i].source, source) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 static void show_defs(const Env *env)
@@ -544,10 +576,27 @@ static void show_defs(const Env *env)
         return;
     }
 
+    int any_manual = 0;
     for (size_t i = 0; i < env->count; i++) {
-        char *s = term_to_string(env->items[i].term, 1);
-        printw("%s = %s\n", env->items[i].name, s);
-        free(s);
+        if (env->items[i].source) continue;
+        print_definition(&env->items[i], "");
+        any_manual = 1;
+    }
+
+    int printed_file_group = 0;
+    for (size_t i = 0; i < env->count; i++) {
+        const char *source = env->items[i].source;
+        if (!source || source_seen_before(env, i)) continue;
+
+        if (any_manual || printed_file_group) printw("\n");
+        printw("%s:\n", source);
+        for (size_t j = i; j < env->count; j++) {
+            if (env->items[j].source &&
+                strcmp(env->items[j].source, source) == 0) {
+                print_definition(&env->items[j], "  ");
+            }
+        }
+        printed_file_group = 1;
     }
 }
 
@@ -695,7 +744,8 @@ static int evaluate_and_print(Term *parsed, const Env *env,
 
 static int save_definition_from_input(Env *env, char *input, char *err, size_t errsz,
                                       const Term *last_output, Term **saved,
-                                      int *reduced_first, int *stopped_early)
+                                      int *reduced_first, int *stopped_early,
+                                      const char *source)
 {
     char *arrow = strstr(input, "<-");
     char *eq = strchr(input, '=');
@@ -737,7 +787,7 @@ static int save_definition_from_input(Env *env, char *input, char *err, size_t e
         *stopped_early = 0;
     }
 
-    if (!env_set_raw(env, name, t)) {
+    if (!env_set_raw(env, name, t, source)) {
         snprintf(err, errsz, "too many definitions; cannot add %s", name);
         return 0;
     }
@@ -758,7 +808,7 @@ static int define_from_arg(Env *env, const char *arg, const Term *last_output)
     char *copy = xstrdup_main(arg);
 
     if (!save_definition_from_input(env, copy, err, sizeof err, last_output,
-                                    NULL, NULL, NULL)) {
+                                    NULL, NULL, NULL, NULL)) {
         fprintf(stderr, "Definition error: %s\n", err);
         free(copy);
         return 1;
@@ -766,6 +816,54 @@ static int define_from_arg(Env *env, const char *arg, const Term *last_output)
 
     free(copy);
     return 0;
+}
+
+static int load_definitions_from_file(Env *env, const char *path,
+                                      const Term *last_output,
+                                      size_t *imported,
+                                      char *err, size_t errsz)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        snprintf(err, errsz, "%s: %s", path, strerror(errno));
+        return 0;
+    }
+
+    char line[INPUT_CAP];
+    size_t line_no = 0;
+    size_t count = 0;
+
+    while (fgets(line, sizeof line, f)) {
+        line_no++;
+        if (!strchr(line, '\n') && !feof(f)) {
+            snprintf(err, errsz, "%s:%zu: line too long", path, line_no);
+            fclose(f);
+            return 0;
+        }
+        line[strcspn(line, "\n")] = '\0';
+
+        char *input = trim_in_place(line);
+        if (*input == '\0' || *input == '#') continue;
+
+        char def_err[256];
+        if (!save_definition_from_input(env, input, def_err, sizeof def_err,
+                                        last_output, NULL, NULL, NULL, path)) {
+            snprintf(err, errsz, "%s:%zu: %s", path, line_no, def_err);
+            fclose(f);
+            return 0;
+        }
+        count++;
+    }
+
+    if (ferror(f)) {
+        snprintf(err, errsz, "%s: read error", path);
+        fclose(f);
+        return 0;
+    }
+
+    fclose(f);
+    if (imported) *imported = count;
+    return 1;
 }
 
 static int evaluate_source_stdout(const char *source, Env *env, Term **last_output)
@@ -820,17 +918,18 @@ static void print_usage(FILE *out, const char *prog)
     fprintf(out, "\n");
     fprintf(out, "Launch the interactive ncurses reducer when no EXPR is given.\n");
     fprintf(out, "With expressions, reduce them in order and print each step.\n");
-    fprintf(out, "Reduction uses normal-order beta reduction; steps are shown with ⟶ᵦ.\n");
+    fprintf(out, "Reduction uses normal-order beta reduction; steps are shown with →ᵦ.\n");
     fprintf(out, "\n");
     fprintf(out, "Options:\n");
     fprintf(out, "  -d, --define NAME=TERM  save a lazy definition before reducing expressions\n");
     fprintf(out, "      --define NAME<-TERM reduce first, then save the result\n");
     fprintf(out, "  -e, --eval EXPR         reduce EXPR\n");
     fprintf(out, "  -f, --free NAME         forget a saved command-line definition\n");
+    fprintf(out, "  -l, --load FILE         load definitions from FILE\n");
     fprintf(out, "  -h, --help              show this help\n");
     fprintf(out, "  -V, --version           show version information\n");
     fprintf(out, "\n");
-    fprintf(out, "Interactive commands include :defs, :free NAME, :version, :clear, :help, and :q.\n");
+    fprintf(out, "Interactive commands include :defs, :free NAME, :load FILE, :version, :clear, :help, and :q.\n");
 }
 
 static int missing_arg(const char *option)
@@ -878,6 +977,32 @@ static int run_batch(int argc, char **argv, Env *env)
 
         if (strncmp(arg, "--define=", 9) == 0) {
             status |= define_from_arg(env, arg + 9, last_output);
+            continue;
+        }
+
+        if (strcmp(arg, "-l") == 0 || strcmp(arg, "--load") == 0) {
+            if (++i >= argc) {
+                term_free(last_output);
+                return missing_arg(arg);
+            }
+            char err[512];
+            size_t imported = 0;
+            if (!load_definitions_from_file(env, argv[i], last_output,
+                                            &imported, err, sizeof err)) {
+                fprintf(stderr, "Load error: %s\n", err);
+                status |= 1;
+            }
+            continue;
+        }
+
+        if (strncmp(arg, "--load=", 7) == 0) {
+            char err[512];
+            size_t imported = 0;
+            if (!load_definitions_from_file(env, arg + 7, last_output,
+                                            &imported, err, sizeof err)) {
+                fprintf(stderr, "Load error: %s\n", err);
+                status |= 1;
+            }
             continue;
         }
 
@@ -979,6 +1104,29 @@ static int run_interactive(Env *env)
             continue;
         }
 
+        if (strncmp(input, ":load", 5) == 0 &&
+            (input[5] == '\0' || isspace((unsigned char)input[5]))) {
+            char *path = trim_in_place(input + 5);
+
+            if (*path == '\0') {
+                printw("Usage: :load FILE\n");
+                continue;
+            }
+
+            char err[512];
+            size_t imported = 0;
+            if (!load_definitions_from_file(env, path, last_output,
+                                            &imported, err, sizeof err)) {
+                printw("Load error: %s\n", err);
+                continue;
+            }
+
+            printw("Imported %zu definition%s from %s, type :defs to see %s.\n",
+                   imported, imported == 1 ? "" : "s", path,
+                   imported == 1 ? "it" : "them");
+            continue;
+        }
+
         if (strncmp(input, ":free", 5) == 0 &&
             (input[5] == '\0' || isspace((unsigned char)input[5]))) {
             char *name = trim_in_place(input + 5);
@@ -1010,7 +1158,8 @@ static int run_interactive(Env *env)
 
             if (!save_definition_from_input(env, input, err, sizeof err,
                                             last_output, &saved,
-                                            &reduced_first, &stopped_early)) {
+                                            &reduced_first, &stopped_early,
+                                            NULL)) {
                 printw("Definition error: %s\n", err);
                 continue;
             }
