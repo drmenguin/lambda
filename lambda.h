@@ -13,6 +13,7 @@
 
 #include <stddef.h>
 
+#define LAMBDA_DEFAULT_MAX_STEPS 300
 #define LAMBDA_MAX_IDENT 64
 
 /* AST --------------------------------------------------------------------- */

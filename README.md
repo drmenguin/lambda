@@ -38,6 +38,8 @@ and save the result. In the interactive interface and in multi-expression
 Use `:load FILE` or `lambda --load FILE` to import definitions from a file.
 Use `:load std` or `lambda --load std` to load the standard definitions in
 [`std.lc`](std.lc).
+It includes combinators, Church booleans and numerals, arithmetic and
+comparison aliases, pairs, and Church-list helpers.
 Interactive `:load` accepts quoted paths like `:load "my file.lc"` and
 backslash-escaped spaces like `:load my\ file.lc`. Leading `~/` is expanded
 to your home directory for both `:load` and `lambda --load`. Definition files
@@ -45,6 +47,8 @@ are read line by line; blank lines and lines starting with `#` are ignored.
 Loaded definitions are grouped by filename in `:defs`.
 Use `:def NAME` to show one saved definition without expanding it; eager
 definitions also show the original expression they were reduced from.
+Use `:max-steps` to show the current reduction step limit, or
+`:max-steps N` to set it for later reductions. The default is 300 steps.
 In the ncurses interface, use PageUp/PageDown or the mouse wheel to scroll
 through previous output. `:clear` clears both the terminal and the internal
 scrollback.
@@ -168,6 +172,7 @@ The plain command-line front end is installed as `lambda-cli`.
 ```sh
 lambda-cli '(\x.x) y'
 printf '%s\n' '(\x.x) y' | lambda-cli
+lambda-cli --max-steps 1000 '(\x.x x) (\x.x x)'
 lambda-cli --help
 ```
 

@@ -741,7 +741,7 @@ Term *term_reduce_once(const Term *t, int *changed)
 Term *term_reduce_normal_order(const Term *t, int max_steps,
                                int *steps, int *stopped_early)
 {
-    if (max_steps <= 0) max_steps = 500;
+    if (max_steps <= 0) max_steps = LAMBDA_DEFAULT_MAX_STEPS;
     if (steps) *steps = 0;
     if (stopped_early) *stopped_early = 0;
 

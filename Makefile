@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 CC ?= cc
-VERSION ?= 0.1.11
+VERSION ?= 0.1.12
 PREFIX ?= /usr
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man
@@ -61,7 +61,9 @@ check: all
 	./lambda '(\x.x) y' --define 'Saved=%' Saved | grep -F '  y    [Saved]'
 	./lambda '(\x.x) y' --define 'Saved<-%' Saved | grep -F '  y    [Saved]'
 	./lambda --load std 'I y' | grep -F '→ᵦ y'
+	./lambda --max-steps 1 '(\x.x x) (\x.x x)' | grep -F 'Stopped after 1 steps'
 	./lambda-cli --eval '(\x.x) y' | grep -F '→ᵦ y'
+	./lambda-cli --max-steps 1 '(\x.x x) (\x.x x)' | grep -F 'Stopped after 1 steps'
 	groff -man -Tutf8 lambda.1 >/dev/null
 	groff -man -Tutf8 lambda-cli.1 >/dev/null
 

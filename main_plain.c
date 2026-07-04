@@ -10,16 +10,48 @@
 
 #include "lambda.h"
 
+#include <ctype.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_STEPS 300
+#define DEFAULT_MAX_STEPS LAMBDA_DEFAULT_MAX_STEPS
 #define LINE_CAP 4096
-#define VERSION "0.1.11"
+#define VERSION "0.1.12"
 #define STEP_PREFIX "→ᵦ "
 
-static int reduce_and_print(const char *source)
+static int parse_positive_int_arg(const char *arg, const char *label,
+                                  int *out)
+{
+    const char *s = arg;
+    while (isspace((unsigned char)*s)) s++;
+
+    if (*s == '\0') {
+        fprintf(stderr, "expected a number after %s\n", label);
+        return 0;
+    }
+
+    errno = 0;
+    char *end = NULL;
+    long value = strtol(s, &end, 10);
+    if (s == end || errno == ERANGE || value < 1 || value > INT_MAX) {
+        fprintf(stderr, "expected a positive number after %s\n", label);
+        return 0;
+    }
+
+    while (isspace((unsigned char)*end)) end++;
+    if (*end != '\0') {
+        fprintf(stderr, "unexpected text after %s value\n", label);
+        return 0;
+    }
+
+    *out = (int)value;
+    return 1;
+}
+
+static int reduce_and_print(const char *source, int max_steps)
 {
     char err[256];
     Term *current = parse_lambda(source, err, sizeof err);
@@ -32,7 +64,7 @@ static int reduce_and_print(const char *source)
     printf("  %s\n", s);
     free(s);
 
-    for (int step = 1; step <= MAX_STEPS; step++) {
+    for (int step = 1; step <= max_steps; step++) {
         int changed = 0;
         Term *next = term_reduce_once(current, &changed);
         if (!changed) {
@@ -47,8 +79,9 @@ static int reduce_and_print(const char *source)
         printf("%s%s\n", STEP_PREFIX, s);
         free(s);
 
-        if (step == MAX_STEPS) {
-            printf("Stopped after %d steps; term may not have a normal form.\n", MAX_STEPS);
+        if (step == max_steps) {
+            printf("Stopped after %d steps; term may not have a normal form.\n",
+                   max_steps);
         }
     }
 
@@ -64,14 +97,17 @@ static void print_usage(FILE *out, const char *prog)
     fprintf(out, "Reduction uses normal-order beta reduction; steps are shown with →ᵦ.\n");
     fprintf(out, "\n");
     fprintf(out, "Options:\n");
-    fprintf(out, "  -e, --eval EXPR  reduce EXPR\n");
-    fprintf(out, "  -h, --help       show this help\n");
-    fprintf(out, "  -V, --version    show version information\n");
+    fprintf(out, "  -e, --eval EXPR    reduce EXPR\n");
+    fprintf(out, "      --max-steps N  stop reducing after N steps (default %d)\n",
+            DEFAULT_MAX_STEPS);
+    fprintf(out, "  -h, --help         show this help\n");
+    fprintf(out, "  -V, --version      show version information\n");
 }
 
 int main(int argc, char **argv)
 {
     int status = 0;
+    int max_steps = DEFAULT_MAX_STEPS;
 
     if (argc > 1) {
         for (int i = 1; i < argc; i++) {
@@ -79,7 +115,7 @@ int main(int argc, char **argv)
 
             if (strcmp(arg, "--") == 0) {
                 for (i++; i < argc; i++) {
-                    status |= reduce_and_print(argv[i]);
+                    status |= reduce_and_print(argv[i], max_steps);
                 }
                 return status;
             }
@@ -99,7 +135,27 @@ int main(int argc, char **argv)
                     fprintf(stderr, "%s: expected an expression\n", arg);
                     return 2;
                 }
-                status |= reduce_and_print(argv[i]);
+                status |= reduce_and_print(argv[i], max_steps);
+                continue;
+            }
+
+            if (strcmp(arg, "--max-steps") == 0) {
+                if (++i >= argc) {
+                    fprintf(stderr, "%s: expected a step count\n", arg);
+                    return 2;
+                }
+                if (!parse_positive_int_arg(argv[i], "--max-steps",
+                                            &max_steps)) {
+                    return 2;
+                }
+                continue;
+            }
+
+            if (strncmp(arg, "--max-steps=", 12) == 0) {
+                if (!parse_positive_int_arg(arg + 12, "--max-steps",
+                                            &max_steps)) {
+                    return 2;
+                }
                 continue;
             }
 
@@ -109,7 +165,7 @@ int main(int argc, char **argv)
                 return 2;
             }
 
-            status |= reduce_and_print(arg);
+            status |= reduce_and_print(arg, max_steps);
         }
         return status;
     }
@@ -118,7 +174,7 @@ int main(int argc, char **argv)
     while (fgets(line, sizeof line, stdin)) {
         line[strcspn(line, "\n")] = '\0';
         if (line[0] == '\0') continue;
-        status |= reduce_and_print(line);
+        status |= reduce_and_print(line, max_steps);
     }
 
     return status;

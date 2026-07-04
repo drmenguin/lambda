@@ -17,6 +17,7 @@
 #include <locale.h>
 #include <curses.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,8 +30,8 @@
 #define HISTORY_CAP 128
 #define SCROLLBACK_CAP 4096
 #define MAX_DEFS 128
-#define MAX_STEPS 300
-#define VERSION "0.1.11"
+#define DEFAULT_MAX_STEPS LAMBDA_DEFAULT_MAX_STEPS
+#define VERSION "0.1.12"
 #define STEP_PREFIX "→ᵦ "
 #ifndef LAMBDA_DATADIR
 #define LAMBDA_DATADIR "/usr/share/lambda"
@@ -64,6 +65,10 @@ typedef struct {
     int scroll;
     int partial;
 } OutputLog;
+
+typedef struct {
+    int max_steps;
+} Settings;
 
 static char *xstrdup_main(const char *s)
 {
@@ -718,6 +723,7 @@ static Term *capture_last_output_refs(const Term *t, const Term *last_output,
 
 static Term *reduce_expanded_normal_form(const Term *t, const Env *env,
                                          const Term *last_output,
+                                         int max_steps,
                                          int *stopped_early,
                                          char *err, size_t errsz)
 {
@@ -725,14 +731,15 @@ static Term *reduce_expanded_normal_form(const Term *t, const Env *env,
     if (!expanded) return NULL;
 
     int steps = 0;
-    Term *normal = term_reduce_normal_order(expanded, MAX_STEPS, &steps,
+    Term *normal = term_reduce_normal_order(expanded, max_steps, &steps,
                                             stopped_early);
     (void)steps;
     term_free(expanded);
     return normal;
 }
 
-static void env_recompute_normals(Env *env, const Term *last_output)
+static void env_recompute_normals(Env *env, const Term *last_output,
+                                  int max_steps)
 {
     for (size_t i = 0; i < env->count; i++) {
         char err[256];
@@ -741,6 +748,7 @@ static void env_recompute_normals(Env *env, const Term *last_output)
         term_free(env->items[i].normal);
         env->items[i].normal = reduce_expanded_normal_form(env->items[i].term,
                                                            env, last_output,
+                                                           max_steps,
                                                            &stopped_early,
                                                            err, sizeof err);
         env->items[i].normal_stopped = env->items[i].normal ? stopped_early : 0;
@@ -756,6 +764,35 @@ static char *trim_in_place(char *s)
     *end = '\0';
 
     return s;
+}
+
+static int parse_positive_int_arg(const char *arg, const char *label,
+                                  int *out, char *err, size_t errsz)
+{
+    const char *s = arg;
+    while (isspace((unsigned char)*s)) s++;
+
+    if (*s == '\0') {
+        snprintf(err, errsz, "expected a number after %s", label);
+        return 0;
+    }
+
+    errno = 0;
+    char *end = NULL;
+    long value = strtol(s, &end, 10);
+    if (s == end || errno == ERANGE || value < 1 || value > INT_MAX) {
+        snprintf(err, errsz, "expected a positive number after %s", label);
+        return 0;
+    }
+
+    while (isspace((unsigned char)*end)) end++;
+    if (*end != '\0') {
+        snprintf(err, errsz, "unexpected text after %s value", label);
+        return 0;
+    }
+
+    *out = (int)value;
+    return 1;
 }
 
 static int parse_load_path_arg(char *arg, char **path, char *err, size_t errsz)
@@ -1123,7 +1160,9 @@ static void print_help(void)
     output_printf("  :defs          show all saved definitions\n");
     output_printf("  :free NAME     forget a saved definition\n");
     output_printf("  :load FILE     load definitions from FILE\n");
-    output_printf("  :load std      load the standard definitions from std.lc\n");
+    output_printf("  :load std      load std.lc: combinators, booleans, numbers, pairs, lists\n");
+    output_printf("  :max-steps [N] show or set the reduction step limit (default %d)\n",
+                  DEFAULT_MAX_STEPS);
     output_printf("  :help          show this help\n");
     output_printf("  :version       show version information\n");
     output_printf("\n");
@@ -1330,7 +1369,8 @@ static void print_term_with_matches(const char *prefix, const Term *term, const 
 }
 
 static int evaluate_and_print(Term *parsed, const Env *env,
-                              const Term *last_output, Term **out_final)
+                              const Term *last_output, int max_steps,
+                              Term **out_final)
 {
     char err[256];
 
@@ -1361,7 +1401,7 @@ static int evaluate_and_print(Term *parsed, const Env *env,
     }
     term_free(shallow);
 
-    for (int step = 1; step <= MAX_STEPS; step++) {
+    for (int step = 1; step <= max_steps; step++) {
         int changed = 0;
         Term *next = term_reduce_once(current, &changed);
         if (!changed) {
@@ -1374,8 +1414,9 @@ static int evaluate_and_print(Term *parsed, const Env *env,
 
         print_term_with_matches(STEP_PREFIX, current, env);
 
-        if (step == MAX_STEPS) {
-            output_printf("Stopped after %d steps; term may not have a normal form.\n", MAX_STEPS);
+        if (step == max_steps) {
+            output_printf("Stopped after %d steps; term may not have a normal form.\n",
+                          max_steps);
         }
     }
 
@@ -1387,7 +1428,7 @@ static int evaluate_and_print(Term *parsed, const Env *env,
 static int save_definition_from_input(Env *env, char *input, char *err, size_t errsz,
                                       const Term *last_output, Term **saved,
                                       int *reduced_first, int *stopped_early,
-                                      const char *source)
+                                      const char *source, int max_steps)
 {
     char *arrow = strstr(input, "<-");
     char *eq = strchr(input, '=');
@@ -1425,6 +1466,7 @@ static int save_definition_from_input(Env *env, char *input, char *err, size_t e
     if (reduce_first) {
         int stopped = 0;
         Term *normal = reduce_expanded_normal_form(t, env, last_output,
+                                                   max_steps,
                                                    &stopped, err, errsz);
         term_free(t);
         if (!normal) return 0;
@@ -1439,7 +1481,7 @@ static int save_definition_from_input(Env *env, char *input, char *err, size_t e
         return 0;
     }
 
-    env_recompute_normals(env, last_output);
+    env_recompute_normals(env, last_output, max_steps);
 
     if (saved) {
         ssize_t idx = env_find(env, name);
@@ -1449,13 +1491,14 @@ static int save_definition_from_input(Env *env, char *input, char *err, size_t e
     return 1;
 }
 
-static int define_from_arg(Env *env, const char *arg, const Term *last_output)
+static int define_from_arg(Env *env, const char *arg, const Term *last_output,
+                           int max_steps)
 {
     char err[256];
     char *copy = xstrdup_main(arg);
 
     if (!save_definition_from_input(env, copy, err, sizeof err, last_output,
-                                    NULL, NULL, NULL, NULL)) {
+                                    NULL, NULL, NULL, NULL, max_steps)) {
         fprintf(stderr, "Definition error: %s\n", err);
         free(copy);
         return 1;
@@ -1467,6 +1510,7 @@ static int define_from_arg(Env *env, const char *arg, const Term *last_output)
 
 static int load_definitions_from_file(Env *env, const char *path,
                                       const Term *last_output,
+                                      int max_steps,
                                       size_t *imported,
                                       char *err, size_t errsz)
 {
@@ -1509,7 +1553,8 @@ static int load_definitions_from_file(Env *env, const char *path,
 
         char def_err[256];
         if (!save_definition_from_input(env, input, def_err, sizeof def_err,
-                                        last_output, NULL, NULL, NULL, path)) {
+                                        last_output, NULL, NULL, NULL, path,
+                                        max_steps)) {
             snprintf(err, errsz, "%s:%zu: %s", path, line_no, def_err);
             fclose(f);
             return 0;
@@ -1528,7 +1573,8 @@ static int load_definitions_from_file(Env *env, const char *path,
     return 1;
 }
 
-static int evaluate_source_stdout(const char *source, Env *env, Term **last_output)
+static int evaluate_source_stdout(const char *source, Env *env,
+                                  Term **last_output, int max_steps)
 {
     char err[256];
     Term *parsed = parse_lambda(source, err, sizeof err);
@@ -1568,7 +1614,7 @@ static int evaluate_source_stdout(const char *source, Env *env, Term **last_outp
     term_free(shallow);
     term_free(parsed);
 
-    for (int step = 1; step <= MAX_STEPS; step++) {
+    for (int step = 1; step <= max_steps; step++) {
         int changed = 0;
         Term *next = term_reduce_once(current, &changed);
         if (!changed) {
@@ -1581,15 +1627,16 @@ static int evaluate_source_stdout(const char *source, Env *env, Term **last_outp
 
         print_term_with_matches(STEP_PREFIX, current, env);
 
-        if (step == MAX_STEPS) {
-            printf("Stopped after %d steps; term may not have a normal form.\n", MAX_STEPS);
+        if (step == max_steps) {
+            printf("Stopped after %d steps; term may not have a normal form.\n",
+                   max_steps);
         }
     }
 
     if (last_output) {
         term_free(*last_output);
         *last_output = term_clone(current);
-        env_recompute_normals(env, *last_output);
+        env_recompute_normals(env, *last_output, max_steps);
     }
     term_free(current);
     return 0;
@@ -1609,11 +1656,13 @@ static void print_usage(FILE *out, const char *prog)
     fprintf(out, "  -e, --eval EXPR         reduce EXPR\n");
     fprintf(out, "  -f, --free NAME         forget a saved command-line definition\n");
     fprintf(out, "  -l, --load FILE         load definitions from FILE\n");
-    fprintf(out, "                          use --load std for std.lc\n");
+    fprintf(out, "                          use --load std for the standard library\n");
+    fprintf(out, "      --max-steps N       stop reducing after N steps (default %d)\n",
+            DEFAULT_MAX_STEPS);
     fprintf(out, "  -h, --help              show this help\n");
     fprintf(out, "  -V, --version           show version information\n");
     fprintf(out, "\n");
-    fprintf(out, "Interactive commands include :def NAME, :defs, :free NAME, :load FILE, :version, :clear, :help, and :q.\n");
+    fprintf(out, "Interactive commands include :def NAME, :defs, :free NAME, :load FILE, :max-steps [N], :version, :clear, :help, and :q.\n");
 }
 
 static int missing_arg(const char *option)
@@ -1626,13 +1675,15 @@ static int run_batch(int argc, char **argv, Env *env)
 {
     int status = 0;
     Term *last_output = NULL;
+    Settings settings = { DEFAULT_MAX_STEPS };
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
 
         if (strcmp(arg, "--") == 0) {
             for (i++; i < argc; i++) {
-                status |= evaluate_source_stdout(argv[i], env, &last_output);
+                status |= evaluate_source_stdout(argv[i], env, &last_output,
+                                                 settings.max_steps);
             }
             term_free(last_output);
             return status;
@@ -1655,12 +1706,14 @@ static int run_batch(int argc, char **argv, Env *env)
                 term_free(last_output);
                 return missing_arg(arg);
             }
-            status |= define_from_arg(env, argv[i], last_output);
+            status |= define_from_arg(env, argv[i], last_output,
+                                      settings.max_steps);
             continue;
         }
 
         if (strncmp(arg, "--define=", 9) == 0) {
-            status |= define_from_arg(env, arg + 9, last_output);
+            status |= define_from_arg(env, arg + 9, last_output,
+                                      settings.max_steps);
             continue;
         }
 
@@ -1672,6 +1725,7 @@ static int run_batch(int argc, char **argv, Env *env)
             char err[512];
             size_t imported = 0;
             if (!load_definitions_from_file(env, argv[i], last_output,
+                                            settings.max_steps,
                                             &imported, err, sizeof err)) {
                 fprintf(stderr, "Load error: %s\n", err);
                 status |= 1;
@@ -1683,6 +1737,7 @@ static int run_batch(int argc, char **argv, Env *env)
             char err[512];
             size_t imported = 0;
             if (!load_definitions_from_file(env, arg + 7, last_output,
+                                            settings.max_steps,
                                             &imported, err, sizeof err)) {
                 fprintf(stderr, "Load error: %s\n", err);
                 status |= 1;
@@ -1699,7 +1754,7 @@ static int run_batch(int argc, char **argv, Env *env)
                 fprintf(stderr, "No definition named %s\n", argv[i]);
                 status |= 1;
             } else {
-                env_recompute_normals(env, last_output);
+                env_recompute_normals(env, last_output, settings.max_steps);
             }
             continue;
         }
@@ -1709,8 +1764,36 @@ static int run_batch(int argc, char **argv, Env *env)
                 fprintf(stderr, "No definition named %s\n", arg + 7);
                 status |= 1;
             } else {
-                env_recompute_normals(env, last_output);
+                env_recompute_normals(env, last_output, settings.max_steps);
             }
+            continue;
+        }
+
+        if (strcmp(arg, "--max-steps") == 0) {
+            if (++i >= argc) {
+                term_free(last_output);
+                return missing_arg(arg);
+            }
+            char err[256];
+            if (!parse_positive_int_arg(argv[i], "--max-steps",
+                                        &settings.max_steps, err, sizeof err)) {
+                fprintf(stderr, "%s\n", err);
+                term_free(last_output);
+                return 2;
+            }
+            env_recompute_normals(env, last_output, settings.max_steps);
+            continue;
+        }
+
+        if (strncmp(arg, "--max-steps=", 12) == 0) {
+            char err[256];
+            if (!parse_positive_int_arg(arg + 12, "--max-steps",
+                                        &settings.max_steps, err, sizeof err)) {
+                fprintf(stderr, "%s\n", err);
+                term_free(last_output);
+                return 2;
+            }
+            env_recompute_normals(env, last_output, settings.max_steps);
             continue;
         }
 
@@ -1719,7 +1802,8 @@ static int run_batch(int argc, char **argv, Env *env)
                 term_free(last_output);
                 return missing_arg(arg);
             }
-            status |= evaluate_source_stdout(argv[i], env, &last_output);
+            status |= evaluate_source_stdout(argv[i], env, &last_output,
+                                             settings.max_steps);
             continue;
         }
 
@@ -1730,7 +1814,8 @@ static int run_batch(int argc, char **argv, Env *env)
             return 2;
         }
 
-        status |= evaluate_source_stdout(arg, env, &last_output);
+        status |= evaluate_source_stdout(arg, env, &last_output,
+                                         settings.max_steps);
     }
 
     term_free(last_output);
@@ -1762,6 +1847,7 @@ static int run_interactive(Env *env)
 
     char line[INPUT_CAP];
     Term *last_output = NULL;
+    Settings settings = { DEFAULT_MAX_STEPS };
 
     while (read_lambda_line("λ> ", line, sizeof line, &history)) {
         char *input = trim_in_place(line);
@@ -1789,6 +1875,29 @@ static int run_interactive(Env *env)
             move(getmaxy(stdscr) - 1, 0);
             clrtoeol();
             refresh();
+            continue;
+        }
+
+        if (strncmp(input, ":max-steps", 10) == 0 &&
+            (input[10] == '\0' || isspace((unsigned char)input[10]))) {
+            char *arg = trim_in_place(input + 10);
+            if (*arg == '\0') {
+                output_printf("max-steps = %d\n", settings.max_steps);
+                continue;
+            }
+
+            char err[256];
+            int max_steps = 0;
+            if (!parse_positive_int_arg(arg, ":max-steps",
+                                        &max_steps, err, sizeof err)) {
+                output_printf("Usage: :max-steps N\n");
+                output_printf("Settings error: %s\n", err);
+                continue;
+            }
+
+            settings.max_steps = max_steps;
+            env_recompute_normals(env, last_output, settings.max_steps);
+            output_printf("max-steps = %d\n", settings.max_steps);
             continue;
         }
 
@@ -1829,6 +1938,7 @@ static int run_interactive(Env *env)
             char err[512];
             size_t imported = 0;
             if (!load_definitions_from_file(env, path, last_output,
+                                            settings.max_steps,
                                             &imported, err, sizeof err)) {
                 output_printf("Load error: %s\n", err);
                 continue;
@@ -1856,7 +1966,7 @@ static int run_interactive(Env *env)
 
             if (env_remove(env, name)) {
                 output_printf("Freed %s.\n", name);
-                env_recompute_normals(env, last_output);
+                env_recompute_normals(env, last_output, settings.max_steps);
             } else {
                 output_printf("No definition named %s.\n", name);
             }
@@ -1872,7 +1982,7 @@ static int run_interactive(Env *env)
             if (!save_definition_from_input(env, input, err, sizeof err,
                                             last_output, &saved,
                                             &reduced_first, &stopped_early,
-                                            NULL)) {
+                                            NULL, settings.max_steps)) {
                 output_printf("Definition error: %s\n", err);
                 continue;
             }
@@ -1882,7 +1992,7 @@ static int run_interactive(Env *env)
             output_printf("Saved %s %s %s\n", name, reduced_first ? "<-" : "=", pretty);
             if (reduced_first && stopped_early) {
                 output_printf("Stopped after %d steps; term may not have a normal form.\n",
-                       MAX_STEPS);
+                              settings.max_steps);
             }
             free(pretty);
             continue;
@@ -1896,10 +2006,11 @@ static int run_interactive(Env *env)
         }
 
         Term *new_last = NULL;
-        if (evaluate_and_print(parsed, env, last_output, &new_last)) {
+        if (evaluate_and_print(parsed, env, last_output, settings.max_steps,
+                               &new_last)) {
             term_free(last_output);
             last_output = new_last;
-            env_recompute_normals(env, last_output);
+            env_recompute_normals(env, last_output, settings.max_steps);
         }
         term_free(parsed);
     }

@@ -1,4 +1,4 @@
-.TH LAMBDA 1 "July 2026" "lambda 0.1.11" "User Commands"
+.TH LAMBDA 1 "July 2026" "lambda 0.1.12" "User Commands"
 .\" Copyright (C) 2026 Luke Collins
 .\" SPDX-License-Identifier: GPL-3.0-or-later
 .SH NAME
@@ -50,11 +50,16 @@ Load definitions from
 .IR FILE .
 Use
 .B --load std
-to load the standard definitions from
+to load the standard library from
 .BR std.lc .
 The file is read line by line; blank lines and lines starting with
 .B #
 are ignored.
+.TP
+.BI --max-steps\  N
+Stop reducing after
+.I N
+steps. The default is 300.
 .TP
 .B \-h, --help
 Show usage information.
@@ -84,7 +89,7 @@ without printing each imported definition. After loading, use
 to see manual definitions first and loaded definitions grouped by filename.
 Use
 .B :load std
-to load the standard definitions from
+to load the standard library from
 .BR std.lc .
 Quoted paths and backslash escapes are accepted, for example
 .B ":load \(dqmy file.lc\(dq"
@@ -93,6 +98,12 @@ or
 Leading
 .B ~/
 is expanded to the current user's home directory.
+.TP
+.BI :max-steps\  N
+Set the reduction step limit for later interactive reductions. With no
+argument,
+.B :max-steps
+shows the current limit. The default is 300 steps.
 .TP
 .B :clear
 Clear the terminal and scrollback.
@@ -140,6 +151,88 @@ definitions.
 .TP
 .B %
 Previous reduction result.
+.SH STANDARD LIBRARY
+Load the standard library with
+.B :load std
+or
+.BR "--load std" .
+It includes common combinators and aliases such as
+.BR I ,
+.BR K ,
+.BR S ,
+.BR Id ,
+.BR Compose ,
+and
+.BR Flip ;
+Church booleans such as
+.BR True ,
+.BR False ,
+.BR And ,
+.BR Or ,
+.BR Not ,
+.BR Xor ,
+.BR Implies ,
+and
+.BR BoolEq ;
+Church numerals
+.BR Zero
+through
+.BR Twelve ;
+arithmetic and comparisons such as
+.BR Succ ,
+.BR Pred ,
+.BR Add ,
+.BR Plus ,
+.BR Mul ,
+.BR Times ,
+.BR Exp ,
+.BR Pow ,
+.BR Sub ,
+.BR Eq ,
+.BR Lt ,
+.BR Lte ,
+.BR Gt ,
+.BR Gte ,
+.BR Min ,
+.BR Max ,
+.BR Even ,
+and
+.BR Odd ;
+pairs such as
+.BR Pair ,
+.BR Fst ,
+.BR Snd ,
+.BR First ,
+.BR Second ,
+.BR Swap ,
+.BR Curry ,
+and
+.BR Uncurry ;
+and Church-list helpers such as
+.BR Nil ,
+.BR Empty ,
+.BR Cons ,
+.BR Singleton ,
+.BR Foldr ,
+.BR Map ,
+.BR Filter ,
+.BR Append ,
+.BR Concat ,
+.BR Length ,
+.BR IsNil ,
+.BR Head ,
+.BR Tail ,
+.BR Any ,
+.BR All ,
+and
+.BR Reverse .
+.PP
+Primed recursive variants such as
+.BR Add' ,
+.BR Foldr' ,
+and
+.BR Map'
+are also provided for comparison with the direct definitions.
 .SH EXAMPLES
 .TP
 .B lambda '(\ex.x) y'

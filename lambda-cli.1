@@ -1,4 +1,4 @@
-.TH LAMBDA-CLI 1 "July 2026" "lambda 0.1.11" "User Commands"
+.TH LAMBDA-CLI 1 "July 2026" "lambda 0.1.12" "User Commands"
 .\" Copyright (C) 2026 Luke Collins
 .\" SPDX-License-Identifier: GPL-3.0-or-later
 .SH NAME
@@ -23,6 +23,11 @@ for the interactive definition table and ncurses interface.
 .BI \-e,\ --eval\  EXPR
 Reduce
 .IR EXPR .
+.TP
+.BI --max-steps\  N
+Stop reducing after
+.I N
+steps. The default is 300.
 .TP
 .B \-h, --help
 Show usage information.

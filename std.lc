@@ -5,23 +5,32 @@
 # or:
 #   lambda --load std
 
-# Combinators
-I=\x.x
-K=\x y.x
-S=\x y z.x z (y z)
-B=\f g x.f (g x)
-C=\f x y.f y x
-W=\f x.f x x
+# Combinators and common aliases
+I = \x.x
+K = \x y.x
+S = \x y z.x z (y z)
+B = \f g x.f (g x)
+C = \f x y.f y x
+W = \f x.f x x
 
-#Logic
+Id = I
+Const = K
+Compose = B
+Flip = C
+Apply = \f x.f x
+
+# Logic (Church booleans)
 True = \lr.l
 False = \lr.r
 If = I
 And = \bc.bc False
 Or = \bc.b True c
 Not = \b.b False True
+Xor = \bc.b(Not c)c
+Implies = \bc.Or(Not b)c
+BoolEq = \bc.b c (Not c)
 
-# Numbers (Church Numerals)
+# Numbers (Church numerals)
 Zero = \fx.x
 Succ = \nfx.f(nfx)
 IsZero = \n.n(\x.False)True
@@ -39,43 +48,78 @@ Ten <- Succ Nine
 Eleven <- Succ Ten
 Twelve <- Succ Eleven
 
-# Operations
+# Arithmetic
 Add = \mnfx.mf(nfx)
 Mul = \mnf.m(nf)
 Exp = \mn.nm
 
 # Pairs
-Pair = \lrp.plr
+Pair = \l r p.p l r
 Fst = \p.p True
 Snd = \p.p False
+First = Fst
+Second = Snd
+Swap = \p.Pair (Snd p) (Fst p)
+Curry = \f x y.f(Pair x y)
+Uncurry = \f p.f(Fst p)(Snd p)
 
-# Lists
-Nil = Pair True I
-Cons = \xy.Pair False(Pair xy)
-IsNil = Fst
-Head = \l.Fst(Snd l)
-Tail = \l.Snd(Snd l)
+# Lists (Church-encoded)
+Nil = \cz.z
+Cons = \xlcz.cx(lcz)
+Foldr = \fzl.lfz
+Sum = \l.l Add Zero
+Append = \klcz.kc(lcz)
+Map = \flcz.l (\xa.c(fx)a)z
+Length = \l.l(\xn.Succ n)Zero
+IsNil = \l.l(\xa.False)True
+Head = \l.l(\xa.x)False
+Tail = \l.Fst(l(\xp.Pair (Snd p)(Cons x (Snd p)))(Pair Nil Nil))
+Empty = Nil
+Singleton = \x.Cons x Nil
+List1 = Singleton
+List2 = \xy.Cons x (Singleton y)
+List3 = \xyz.Cons x (Cons y (Singleton z))
+Null = IsNil
+Rest = Tail
+Concat = \l.l Append Nil
+Filter = \pl.l(\xa.If (p x) (Cons x a) a)Nil
+Any = \pl.l(\xa.Or (p x) a)False
+All = \pl.l(\xa.And (p x) a)True
+Reverse = \l.l(\xa.Append a (Singleton x))Nil
 
 # Predecessor
 Phi = \p.Pair (Snd p) (Succ(Snd p))
 Pre = \n.Fst(n Phi (Pair Zero Zero))
+Pred = Pre
 
-# Subtraction and Equality
+# Numeric comparisons and aliases
 Sub = \mn.n Pre m
 Leq = \mn.IsZero(Sub mn)
 Eq  = \mn.And(Leq mn)(Leq nm)
+Inc = Succ
+Plus = Add
+Times = Mul
+Pow = Exp
+Minus = Sub
+Lte = Leq
+Gte = \mn.Leq n m
+Lt = \mn.Not(Leq n m)
+Gt = \mn.Not(Leq m n)
+Neq = \mn.Not(Eq m n)
+Min = \mn.If (Leq m n) m n
+Max = \mn.If (Leq m n) n m
+Even = \n.n Not True
+Odd = \n.n Not False
 
 # Y combinator
 Y = \f.(\x.f(xx))(\x.f(xx))
 
-# Recursive Definitions (Numbers)
+# Recursive variants, kept for comparison
 Add' = Y\g.\mn.If (IsZero n) m (Succ(gm(Pre n)))
 Sub' = Y\g.\mn.If (IsZero n) m (Pre(gm(Pre n)))
 Eq'  = Y\g.\mn.If (And (IsZero m) (IsZero n)) True (If (Or (IsZero m) (IsZero n)) False (g (Pre m) (Pre n)))
-
-# Recursive Definitions (Lists)
-Foldr = Y\g.\fzl.If (IsNil l) z (f (Head l) (g f z (Tail l)))
-Sum = Foldr Add Zero
-Append = \kl.Foldr Cons l k
-Map = \fl.Foldr (\xa.Cons (f x) a) Nil l
-Length = \l.Foldr (\xn.Succ n) Zero l
+Foldr' = Y\g.\fzl.If (IsNil l) z (f (Head l) (g f z (Tail l)))
+Sum' = Foldr' Add Zero
+Append' = \kl.Foldr' Cons l k
+Map' = \fl.Foldr' (\xa.Cons (f x) a) Nil l
+Length' = \l.Foldr' (\xn.Succ n) Zero l
