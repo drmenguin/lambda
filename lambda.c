@@ -329,10 +329,11 @@ static void advance(Parser *p)
 /* Parser ------------------------------------------------------------------ */
 
 static Term *parse_term(Parser *p);
+static Term *parse_abstraction(Parser *p);
 
 static int starts_atom(TokenType ty)
 {
-    return ty == TOK_IDENT || ty == TOK_LPAREN;
+    return ty == TOK_IDENT || ty == TOK_LPAREN || ty == TOK_LAMBDA;
 }
 
 static Term *parse_atom(Parser *p)
@@ -365,7 +366,11 @@ static Term *parse_atom(Parser *p)
         return inside;
     }
 
-    parser_error(p, "expected a variable or '(' at position %zu", p->tok.pos);
+    if (p->tok.type == TOK_LAMBDA) {
+        return parse_abstraction(p);
+    }
+
+    parser_error(p, "expected a variable, abstraction, or '(' at position %zu", p->tok.pos);
     return NULL;
 }
 

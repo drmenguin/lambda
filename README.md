@@ -35,8 +35,10 @@ Use `=` to save a definition lazily. Use `<-` to reduce the expression first
 and save the result. In the interactive interface and in multi-expression
 `lambda` invocations, `%` refers to the previous reduction result.
 Use `:load FILE` or `lambda --load FILE` to import definitions from a file.
-Definition files are read line by line; blank lines and lines starting with `#`
-are ignored. Loaded definitions are grouped by filename in `:defs`.
+Interactive `:load` accepts quoted paths like `:load "my file.lc"` and
+backslash-escaped spaces like `:load my\ file.lc`. Definition files are read
+line by line; blank lines and lines starting with `#` are ignored. Loaded
+definitions are grouped by filename in `:defs`.
 
 When a displayed term is alpha-equivalent to saved definitions, `lambda` shows
 the matching names beside it. A `*` means the saved definition reduces to the
@@ -58,6 +60,7 @@ lambda -d 'I=\x.x' -d 'J=\y.y' '\z.z'
 ```text
 \x.x        abstraction
 x y z       application, left associative: (x y) z
+f \x.x      bare lambda arguments are accepted, meaning f (λx.x)
 xx          lowercase letters split into variables: x x
 x1 x2       subscript-style variables, displayed as x₁ x₂
 KI, Ki      uppercase-starting names stay as one identifier

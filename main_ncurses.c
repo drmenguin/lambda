@@ -27,7 +27,7 @@
 #define HISTORY_CAP 128
 #define MAX_DEFS 128
 #define MAX_STEPS 300
-#define VERSION "0.1.5"
+#define VERSION "0.1.7"
 #define STEP_PREFIX "→ᵦ "
 
 static int curses_started = 0;
@@ -287,6 +287,56 @@ static char *trim_in_place(char *s)
     return s;
 }
 
+static int parse_load_path_arg(char *arg, char **path, char *err, size_t errsz)
+{
+    char *s = trim_in_place(arg);
+    if (*s == '\0') {
+        snprintf(err, errsz, "expected a file path");
+        return 0;
+    }
+
+    char *out = s;
+    char quote = '\0';
+    int closed_quote = 0;
+    if (*s == '\'' || *s == '"') {
+        quote = *s;
+        s++;
+    }
+
+    *path = out;
+
+    while (*s) {
+        if (quote && *s == quote) {
+            s++;
+            closed_quote = 1;
+            break;
+        }
+
+        if (*s == '\\' && s[1] != '\0') {
+            s++;
+        }
+
+        *out++ = *s++;
+    }
+
+    *out = '\0';
+
+    if (quote && closed_quote) {
+        s = trim_in_place(s);
+        if (*s != '\0') {
+            snprintf(err, errsz, "unexpected text after quoted file path");
+            return 0;
+        }
+    }
+
+    if (**path == '\0') {
+        snprintf(err, errsz, "expected a file path");
+        return 0;
+    }
+
+    return 1;
+}
+
 static int valid_def_name(const char *s)
 {
     if (!*s) return 0;
@@ -332,6 +382,7 @@ static void render_input_line(int y, const char *prompt, const char *buf, size_t
 
     int cursor_x = 0;
     int can_subscript = 0;
+    int command = buf[0] == ':';
     for (size_t i = 0; buf[i]; i++) {
         unsigned char c = (unsigned char)buf[i];
 
@@ -341,14 +392,14 @@ static void render_input_line(int y, const char *prompt, const char *buf, size_t
             (void)cy;
         }
 
-        if (buf[i] == '\\') {
+        if (!command && buf[i] == '\\') {
             addwstr(L"λ");
             can_subscript = 0;
-        } else if (isdigit(c) && can_subscript) {
+        } else if (!command && isdigit(c) && can_subscript) {
             addwstr(subscript_digit_wstr(buf[i]));
         } else {
             addch(c);
-            can_subscript = isalpha(c) || c == '\'';
+            can_subscript = !command && (isalpha(c) || c == '\'');
         }
     }
 
@@ -531,6 +582,7 @@ static void print_help(void)
     printw("Syntax:\n");
     printw("  \\x.x           abstraction; displayed as λx.x while typing\n");
     printw("  x y z          application; left associative: (x y) z\n");
+    printw("  f \\x.x         bare lambda arguments are accepted: f (λx.x)\n");
     printw("  xx             same as x x; lowercase letters split into variables\n");
     printw("  x1 x2          subscripted variables; displayed as x₁ x₂\n");
     printw("  KI, Ki         uppercase-starting names stay as one identifier\n");
@@ -540,7 +592,8 @@ static void print_help(void)
     printw("  %%              previous reduction result\n");
     printw("  M y            use a named definition\n");
     printw("  :free M        remove a saved definition\n");
-    printw("  :load defs.lc  import definitions without printing each one\n");
+    printw("  :load defs.lc  import definitions from the file defs.lc\n");
+    printw("  :load \"my file.lc\"  quote or backslash-escape spaces in paths\n");
     printw("\n");
     printw("Other:\n");
     printw("  [M, N]         shown beside terms alpha-equivalent to saved definitions\n");
@@ -1106,10 +1159,12 @@ static int run_interactive(Env *env)
 
         if (strncmp(input, ":load", 5) == 0 &&
             (input[5] == '\0' || isspace((unsigned char)input[5]))) {
-            char *path = trim_in_place(input + 5);
+            char *path = NULL;
+            char path_err[256];
 
-            if (*path == '\0') {
+            if (!parse_load_path_arg(input + 5, &path, path_err, sizeof path_err)) {
                 printw("Usage: :load FILE\n");
+                printw("Load error: %s\n", path_err);
                 continue;
             }
 

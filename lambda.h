@@ -58,6 +58,7 @@ void term_free(Term *t);
    Parses syntax such as:
        x
        x y z              meaning ((x y) z)
+       f \x.x             meaning f (\x.x)
        xx                 meaning x x
        x1 x2              subscripted variables, printed as x₁ x₂
        KI, Ki             uppercase-starting multi-character names
