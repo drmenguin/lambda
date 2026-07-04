@@ -10,7 +10,7 @@ It includes an interactive ncurses interface and a plain command-line reducer.
 
 ## What It Does
 Lambda expressions are parsed, printed with Unicode lambda notation, and reduced
-using normal-order beta reduction.
+using normal-order beta reduction. Reduction steps are marked with `⟶ᵦ`.
 
 Examples:
 
@@ -25,12 +25,18 @@ The interactive interface lets you save definitions:
 ```text
 I = \x.x
 K = \x y.x
+One <- Succ Zero
 :defs
 :free I
 ```
 
+Use `=` to save a definition lazily. Use `<-` to reduce the expression first
+and save the result. In the interactive interface and in multi-expression
+`lambda` invocations, `%` refers to the previous reduction result.
+
 When a displayed term is alpha-equivalent to saved definitions, `lambda` shows
-the matching names beside it:
+the matching names beside it. A `*` means the saved definition reduces to the
+displayed term:
 
 ```sh
 lambda -d 'I=\x.x' -d 'J=\y.y' '\z.z'
@@ -40,6 +46,10 @@ lambda -d 'I=\x.x' -d 'J=\y.y' '\z.z'
   λz.z    [I, J]
 ```
 
+```text
+  λf x.f x    [One*]
+```
+
 ## Syntax
 ```text
 \x.x        abstraction
@@ -47,6 +57,7 @@ x y z       application, left associative: (x y) z
 xx          lowercase letters split into variables: x x
 x1 x2       subscript-style variables, displayed as x₁ x₂
 KI, Ki      uppercase-starting names stay as one identifier
+%           previous reduction result in lambda
 ```
 
 Both backslash and the UTF-8 lambda character are accepted as lambdas.

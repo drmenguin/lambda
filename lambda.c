@@ -245,6 +245,13 @@ static Token next_token_raw(const char *src, size_t *pos)
         return t;
     }
 
+    if (c == '%') {
+        t.type = TOK_IDENT;
+        strcpy(t.lexeme, "%");
+        (*pos)++;
+        return t;
+    }
+
     if (islower(c)) {
         size_t len = 0;
         if (!append_lexeme_char(&t, &len, (char)c)) return t;

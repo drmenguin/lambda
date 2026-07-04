@@ -1,4 +1,4 @@
-.TH LAMBDA-CLI 1 "July 2026" "lambda 0.1.2" "User Commands"
+.TH LAMBDA-CLI 1 "July 2026" "lambda 0.1.4" "User Commands"
 .\" Copyright (C) 2026 Luke Collins
 .\" SPDX-License-Identifier: GPL-3.0-or-later
 .SH NAME
@@ -11,6 +11,9 @@ lambda-cli \- plain command-line lambda calculus beta reducer
 .B lambda-cli
 reduces lambda calculus expressions from command-line arguments. If no
 expression is supplied, it reads expressions line by line from standard input.
+.PP
+Expressions use normal-order beta reduction. Reduction steps are marked with
+.BR ⟶ᵦ .
 .PP
 This command is the minimal non-ncurses front end. Use
 .BR lambda (1)

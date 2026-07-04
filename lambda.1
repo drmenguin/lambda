@@ -1,4 +1,4 @@
-.TH LAMBDA 1 "July 2026" "lambda 0.1.2" "User Commands"
+.TH LAMBDA 1 "July 2026" "lambda 0.1.4" "User Commands"
 .\" Copyright (C) 2026 Luke Collins
 .\" SPDX-License-Identifier: GPL-3.0-or-later
 .SH NAME
@@ -13,17 +13,27 @@ starts an interactive ncurses lambda calculus reducer when no expression is
 given. With one or more expressions, it reduces each expression on standard
 output and exits.
 .PP
-Expressions use normal-order beta reduction. Backslash and the UTF-8 lambda
-character both introduce abstractions.
+Expressions use normal-order beta reduction. Reduction steps are marked with
+.BR ⟶ᵦ .
+Backslash and the UTF-8 lambda character both introduce abstractions.
 .PP
 When a displayed term is alpha-equivalent to one or more saved definitions,
 .B lambda
 shows those definition names in brackets beside the term.
+If a name is followed by
+.BR * ,
+the saved definition reduces to the displayed term.
 .SH OPTIONS
 .TP
 .BI \-d,\ --define\  NAME=TERM
-Save a named definition before reducing expressions. Definitions may be used by
-later expressions in the same invocation.
+Save a lazy named definition before reducing expressions. Definitions may be
+used by later expressions in the same invocation.
+.TP
+.BI \-d,\ --define\  NAME<-TERM
+Reduce
+.I TERM
+first, then save the result as
+.IR NAME .
 .TP
 .BI \-e,\ --eval\  EXPR
 Reduce
@@ -51,6 +61,9 @@ Clear the terminal.
 .B :help
 Show interactive help.
 .TP
+.B :version
+Show version information.
+.TP
 .B :q
 Quit.
 .SH SYNTAX
@@ -74,6 +87,9 @@ Subscript-style variables. The interactive interface displays them as
 .B KI, Ki
 Uppercase-starting names remain single identifiers and are useful for saved
 definitions.
+.TP
+.B %
+Previous reduction result.
 .SH EXAMPLES
 .TP
 .B lambda '(\ex.x) y'
@@ -83,7 +99,11 @@ Reduce an expression and print each step.
 Save a definition and use it in a later expression.
 .TP
 .B I = \ex.x
-In the interactive interface, save a definition.
+In the interactive interface, save a lazy definition.
+.TP
+.B I <- (\ex.x) y
+In the interactive interface, reduce first and save the result as
+.BR I .
 .TP
 .B :free I
 Remove the saved definition named

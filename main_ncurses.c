@@ -26,13 +26,16 @@
 #define HISTORY_CAP 128
 #define MAX_DEFS 128
 #define MAX_STEPS 300
-#define VERSION "0.1.2"
+#define VERSION "0.1.4"
+#define STEP_PREFIX "⟶ᵦ "
 
 static int curses_started = 0;
 
 typedef struct {
     char *name;
     Term *term;
+    Term *normal;
+    int normal_stopped;
 } Definition;
 
 typedef struct {
@@ -89,6 +92,7 @@ static void env_free(Env *env)
     for (size_t i = 0; i < env->count; i++) {
         free(env->items[i].name);
         term_free(env->items[i].term);
+        term_free(env->items[i].normal);
     }
 }
 
@@ -100,12 +104,15 @@ static ssize_t env_find(const Env *env, const char *name)
     return -1;
 }
 
-static int env_set(Env *env, const char *name, Term *term)
+static int env_set_raw(Env *env, const char *name, Term *term)
 {
     ssize_t i = env_find(env, name);
     if (i >= 0) {
         term_free(env->items[i].term);
+        term_free(env->items[i].normal);
         env->items[i].term = term;
+        env->items[i].normal = NULL;
+        env->items[i].normal_stopped = 0;
         return 1;
     }
 
@@ -116,6 +123,8 @@ static int env_set(Env *env, const char *name, Term *term)
 
     env->items[env->count].name = xstrdup_main(name);
     env->items[env->count].term = term;
+    env->items[env->count].normal = NULL;
+    env->items[env->count].normal_stopped = 0;
     env->count++;
     return 1;
 }
@@ -128,6 +137,7 @@ static int env_remove(Env *env, const char *name)
     size_t i = (size_t)idx;
     free(env->items[i].name);
     term_free(env->items[i].term);
+    term_free(env->items[i].normal);
 
     if (i + 1 < env->count) {
         memmove(env->items + i, env->items + i + 1,
@@ -147,6 +157,7 @@ static int name_in_list(const char *name, const char **xs, size_t n)
 }
 
 static Term *expand_defs_rec(const Term *t, const Env *env,
+                             const Term *last_output,
                              const char **bound, size_t nbound,
                              const char **expanding, size_t nexpanding,
                              char *err, size_t errsz)
@@ -157,6 +168,14 @@ static Term *expand_defs_rec(const Term *t, const Env *env,
 
             if (name_in_list(name, bound, nbound)) {
                 return term_clone(t);
+            }
+
+            if (strcmp(name, "%") == 0) {
+                if (!last_output) {
+                    snprintf(err, errsz, "no previous reduction for '%%'");
+                    return NULL;
+                }
+                return term_clone(last_output);
             }
 
             ssize_t idx = env_find(env, name);
@@ -173,15 +192,15 @@ static Term *expand_defs_rec(const Term *t, const Env *env,
             for (size_t i = 0; i < nexpanding; i++) new_expanding[i] = expanding[i];
             new_expanding[nexpanding] = name;
 
-            return expand_defs_rec(env->items[idx].term, env, bound, nbound,
+            return expand_defs_rec(env->items[idx].term, env, last_output, bound, nbound,
                                    new_expanding, nexpanding + 1, err, errsz);
         }
 
         case TERM_APP: {
-            Term *l = expand_defs_rec(t->as.app.left, env, bound, nbound,
+            Term *l = expand_defs_rec(t->as.app.left, env, last_output, bound, nbound,
                                       expanding, nexpanding, err, errsz);
             if (!l) return NULL;
-            Term *r = expand_defs_rec(t->as.app.right, env, bound, nbound,
+            Term *r = expand_defs_rec(t->as.app.right, env, last_output, bound, nbound,
                                       expanding, nexpanding, err, errsz);
             if (!r) {
                 term_free(l);
@@ -199,7 +218,8 @@ static Term *expand_defs_rec(const Term *t, const Env *env,
             for (size_t i = 0; i < nbound; i++) new_bound[i] = bound[i];
             new_bound[nbound] = t->as.abs.param;
 
-            Term *body = expand_defs_rec(t->as.abs.body, env, new_bound, nbound + 1,
+            Term *body = expand_defs_rec(t->as.abs.body, env, last_output,
+                                         new_bound, nbound + 1,
                                          expanding, nexpanding, err, errsz);
             if (!body) return NULL;
             return term_abs(t->as.abs.param, body);
@@ -209,12 +229,44 @@ static Term *expand_defs_rec(const Term *t, const Env *env,
     return NULL;
 }
 
-static Term *expand_defs(const Term *t, const Env *env, char *err, size_t errsz)
+static Term *expand_defs(const Term *t, const Env *env, const Term *last_output,
+                         char *err, size_t errsz)
 {
     const char *bound[1];
     const char *expanding[1];
     if (err && errsz) err[0] = '\0';
-    return expand_defs_rec(t, env, bound, 0, expanding, 0, err, errsz);
+    return expand_defs_rec(t, env, last_output, bound, 0, expanding, 0, err, errsz);
+}
+
+static Term *reduce_expanded_normal_form(const Term *t, const Env *env,
+                                         const Term *last_output,
+                                         int *stopped_early,
+                                         char *err, size_t errsz)
+{
+    Term *expanded = expand_defs(t, env, last_output, err, errsz);
+    if (!expanded) return NULL;
+
+    int steps = 0;
+    Term *normal = term_reduce_normal_order(expanded, MAX_STEPS, &steps,
+                                            stopped_early);
+    (void)steps;
+    term_free(expanded);
+    return normal;
+}
+
+static void env_recompute_normals(Env *env, const Term *last_output)
+{
+    for (size_t i = 0; i < env->count; i++) {
+        char err[256];
+        int stopped_early = 0;
+
+        term_free(env->items[i].normal);
+        env->items[i].normal = reduce_expanded_normal_form(env->items[i].term,
+                                                           env, last_output,
+                                                           &stopped_early,
+                                                           err, sizeof err);
+        env->items[i].normal_stopped = env->items[i].normal ? stopped_early : 0;
+    }
 }
 
 static char *trim_in_place(char *s)
@@ -460,6 +512,7 @@ static void print_help(void)
     printw("  :defs          show definitions\n");
     printw("  :free NAME     forget a saved definition\n");
     printw("  :help          show this help\n");
+    printw("  :version       show version information\n");
     printw("\n");
     printw("Keys:\n");
     printw("  Left/Right     move within the current input\n");
@@ -467,6 +520,7 @@ static void print_help(void)
     printw("  Home/End       jump to start/end of input\n");
     printw("\n");
     printw("Syntax:\n");
+    printw("  Reduction uses normal-order beta reduction; steps are shown with ⟶ᵦ\n");
     printw("  \\x.x           abstraction; displayed as λx.x while typing\n");
     printw("  x y z          application; left associative: (x y) z\n");
     printw("  xx             same as x x; lowercase letters split into variables\n");
@@ -474,9 +528,12 @@ static void print_help(void)
     printw("  KI, Ki         uppercase-starting names stay as one identifier\n");
     printw("  (\\x.x) y       beta-reduces to y\n");
     printw("  I = \\x.x       save a named definition\n");
+    printw("  I <- (\\x.x) y  reduce first, then save the result as I\n");
+    printw("  %%              previous reduction result\n");
     printw("  I y            use a named definition\n");
     printw("  :free I        remove a saved definition\n");
     printw("  [I, J]         shown beside terms alpha-equivalent to saved definitions\n");
+    printw("  [I*]           I reduces to the displayed term\n");
     printw("\n");
 }
 
@@ -494,6 +551,39 @@ static void show_defs(const Env *env)
     }
 }
 
+static void append_match(char **s, size_t *cap, size_t *len, int *any,
+                         const char *name, int star)
+{
+    size_t namelen = strlen(name);
+    size_t need = *len + namelen + (star ? 1 : 0) + (*any ? 2 : 1) + 2;
+    if (need > *cap) {
+        while (*cap < need) *cap *= 2;
+        char *new_s = realloc(*s, *cap);
+        if (!new_s) {
+            free(*s);
+            if (curses_started) endwin();
+            fprintf(stderr, "out of memory\n");
+            exit(EXIT_FAILURE);
+        }
+        *s = new_s;
+    }
+
+    if (!*any) {
+        (*s)[(*len)++] = '[';
+        (*s)[*len] = '\0';
+    } else {
+        (*s)[(*len)++] = ',';
+        (*s)[(*len)++] = ' ';
+        (*s)[*len] = '\0';
+    }
+
+    memcpy(*s + *len, name, namelen);
+    *len += namelen;
+    if (star) (*s)[(*len)++] = '*';
+    (*s)[*len] = '\0';
+    *any = 1;
+}
+
 static char *alpha_matches_to_string(const Term *term, const Env *env)
 {
     size_t cap = 32;
@@ -508,34 +598,12 @@ static char *alpha_matches_to_string(const Term *term, const Env *env)
     s[0] = '\0';
 
     for (size_t i = 0; i < env->count; i++) {
-        if (!term_alpha_equivalent(term, env->items[i].term)) continue;
-
-        const char *name = env->items[i].name;
-        size_t need = len + strlen(name) + (any ? 2 : 1) + 2;
-        if (need > cap) {
-            while (cap < need) cap *= 2;
-            char *new_s = realloc(s, cap);
-            if (!new_s) {
-                free(s);
-                if (curses_started) endwin();
-                fprintf(stderr, "out of memory\n");
-                exit(EXIT_FAILURE);
-            }
-            s = new_s;
+        if (term_alpha_equivalent(term, env->items[i].term)) {
+            append_match(&s, &cap, &len, &any, env->items[i].name, 0);
+        } else if (env->items[i].normal &&
+                   term_alpha_equivalent(term, env->items[i].normal)) {
+            append_match(&s, &cap, &len, &any, env->items[i].name, 1);
         }
-
-        if (!any) {
-            s[len++] = '[';
-            s[len] = '\0';
-        } else {
-            s[len++] = ',';
-            s[len++] = ' ';
-            s[len] = '\0';
-        }
-
-        memcpy(s + len, name, strlen(name) + 1);
-        len += strlen(name);
-        any = 1;
     }
 
     if (!any) return s;
@@ -589,13 +657,14 @@ static void print_term_with_matches(const char *prefix, const Term *term, const 
     free(s);
 }
 
-static void evaluate_and_print(Term *parsed, const Env *env)
+static int evaluate_and_print(Term *parsed, const Env *env,
+                              const Term *last_output, Term **out_final)
 {
     char err[256];
-    Term *expanded = expand_defs(parsed, env, err, sizeof err);
+    Term *expanded = expand_defs(parsed, env, last_output, err, sizeof err);
     if (!expanded) {
         printw("Expansion error: %s\n", err);
-        return;
+        return 0;
     }
 
     Term *current = expanded;
@@ -612,28 +681,35 @@ static void evaluate_and_print(Term *parsed, const Env *env)
         term_free(current);
         current = next;
 
-        print_term_with_matches("→ ", current, env);
+        print_term_with_matches(STEP_PREFIX, current, env);
 
         if (step == MAX_STEPS) {
             printw("Stopped after %d steps; term may not have a normal form.\n", MAX_STEPS);
         }
     }
 
+    if (out_final) *out_final = term_clone(current);
     term_free(current);
+    return 1;
 }
 
 static int save_definition_from_input(Env *env, char *input, char *err, size_t errsz,
-                                      Term **saved)
+                                      const Term *last_output, Term **saved,
+                                      int *reduced_first, int *stopped_early)
 {
+    char *arrow = strstr(input, "<-");
     char *eq = strchr(input, '=');
-    if (!eq) {
-        snprintf(err, errsz, "expected NAME=TERM");
+    int reduce_first = arrow && (!eq || arrow < eq);
+    char *op = reduce_first ? arrow : eq;
+
+    if (!op) {
+        snprintf(err, errsz, "expected NAME=TERM or NAME<-TERM");
         return 0;
     }
 
-    *eq = '\0';
+    *op = '\0';
     char *name = trim_in_place(input);
-    char *rhs = trim_in_place(eq + 1);
+    char *rhs = trim_in_place(op + (reduce_first ? 2 : 1));
 
     if (!valid_def_name(name)) {
         snprintf(err, errsz,
@@ -642,28 +718,47 @@ static int save_definition_from_input(Env *env, char *input, char *err, size_t e
     }
 
     if (*rhs == '\0') {
-        snprintf(err, errsz, "expected a term after '='");
+        snprintf(err, errsz, "expected a term after '%s'", reduce_first ? "<-" : "=");
         return 0;
     }
 
     Term *t = parse_lambda(rhs, err, errsz);
     if (!t) return 0;
 
-    if (!env_set(env, name, t)) {
+    if (reduce_first) {
+        int stopped = 0;
+        Term *normal = reduce_expanded_normal_form(t, env, last_output,
+                                                   &stopped, err, errsz);
+        term_free(t);
+        if (!normal) return 0;
+        t = normal;
+        if (stopped_early) *stopped_early = stopped;
+    } else if (stopped_early) {
+        *stopped_early = 0;
+    }
+
+    if (!env_set_raw(env, name, t)) {
         snprintf(err, errsz, "too many definitions; cannot add %s", name);
         return 0;
     }
 
-    if (saved) *saved = t;
+    env_recompute_normals(env, last_output);
+
+    if (saved) {
+        ssize_t idx = env_find(env, name);
+        *saved = idx >= 0 ? env->items[idx].term : NULL;
+    }
+    if (reduced_first) *reduced_first = reduce_first;
     return 1;
 }
 
-static int define_from_arg(Env *env, const char *arg)
+static int define_from_arg(Env *env, const char *arg, const Term *last_output)
 {
     char err[256];
     char *copy = xstrdup_main(arg);
 
-    if (!save_definition_from_input(env, copy, err, sizeof err, NULL)) {
+    if (!save_definition_from_input(env, copy, err, sizeof err, last_output,
+                                    NULL, NULL, NULL)) {
         fprintf(stderr, "Definition error: %s\n", err);
         free(copy);
         return 1;
@@ -673,7 +768,7 @@ static int define_from_arg(Env *env, const char *arg)
     return 0;
 }
 
-static int evaluate_source_stdout(const char *source, const Env *env)
+static int evaluate_source_stdout(const char *source, Env *env, Term **last_output)
 {
     char err[256];
     Term *parsed = parse_lambda(source, err, sizeof err);
@@ -682,7 +777,8 @@ static int evaluate_source_stdout(const char *source, const Env *env)
         return 1;
     }
 
-    Term *current = expand_defs(parsed, env, err, sizeof err);
+    Term *current = expand_defs(parsed, env, last_output ? *last_output : NULL,
+                                err, sizeof err);
     term_free(parsed);
     if (!current) {
         fprintf(stderr, "Expansion error: %s\n", err);
@@ -702,13 +798,18 @@ static int evaluate_source_stdout(const char *source, const Env *env)
         term_free(current);
         current = next;
 
-        print_term_with_matches("→ ", current, env);
+        print_term_with_matches(STEP_PREFIX, current, env);
 
         if (step == MAX_STEPS) {
             printf("Stopped after %d steps; term may not have a normal form.\n", MAX_STEPS);
         }
     }
 
+    if (last_output) {
+        term_free(*last_output);
+        *last_output = term_clone(current);
+        env_recompute_normals(env, *last_output);
+    }
     term_free(current);
     return 0;
 }
@@ -719,15 +820,17 @@ static void print_usage(FILE *out, const char *prog)
     fprintf(out, "\n");
     fprintf(out, "Launch the interactive ncurses reducer when no EXPR is given.\n");
     fprintf(out, "With expressions, reduce them in order and print each step.\n");
+    fprintf(out, "Reduction uses normal-order beta reduction; steps are shown with ⟶ᵦ.\n");
     fprintf(out, "\n");
     fprintf(out, "Options:\n");
-    fprintf(out, "  -d, --define NAME=TERM  save a definition before reducing expressions\n");
+    fprintf(out, "  -d, --define NAME=TERM  save a lazy definition before reducing expressions\n");
+    fprintf(out, "      --define NAME<-TERM reduce first, then save the result\n");
     fprintf(out, "  -e, --eval EXPR         reduce EXPR\n");
     fprintf(out, "  -f, --free NAME         forget a saved command-line definition\n");
     fprintf(out, "  -h, --help              show this help\n");
     fprintf(out, "  -V, --version           show version information\n");
     fprintf(out, "\n");
-    fprintf(out, "Interactive commands include :defs, :free NAME, :clear, :help, and :q.\n");
+    fprintf(out, "Interactive commands include :defs, :free NAME, :version, :clear, :help, and :q.\n");
 }
 
 static int missing_arg(const char *option)
@@ -739,43 +842,55 @@ static int missing_arg(const char *option)
 static int run_batch(int argc, char **argv, Env *env)
 {
     int status = 0;
+    Term *last_output = NULL;
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
 
         if (strcmp(arg, "--") == 0) {
             for (i++; i < argc; i++) {
-                status |= evaluate_source_stdout(argv[i], env);
+                status |= evaluate_source_stdout(argv[i], env, &last_output);
             }
+            term_free(last_output);
             return status;
         }
 
         if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
             print_usage(stdout, argv[0]);
+            term_free(last_output);
             return 0;
         }
 
         if (strcmp(arg, "-V") == 0 || strcmp(arg, "--version") == 0) {
             printf("lambda %s\n", VERSION);
+            term_free(last_output);
             return 0;
         }
 
         if (strcmp(arg, "-d") == 0 || strcmp(arg, "--define") == 0) {
-            if (++i >= argc) return missing_arg(arg);
-            status |= define_from_arg(env, argv[i]);
+            if (++i >= argc) {
+                term_free(last_output);
+                return missing_arg(arg);
+            }
+            status |= define_from_arg(env, argv[i], last_output);
             continue;
         }
 
         if (strncmp(arg, "--define=", 9) == 0) {
-            status |= define_from_arg(env, arg + 9);
+            status |= define_from_arg(env, arg + 9, last_output);
             continue;
         }
 
         if (strcmp(arg, "-f") == 0 || strcmp(arg, "--free") == 0) {
-            if (++i >= argc) return missing_arg(arg);
+            if (++i >= argc) {
+                term_free(last_output);
+                return missing_arg(arg);
+            }
             if (!env_remove(env, argv[i])) {
                 fprintf(stderr, "No definition named %s\n", argv[i]);
                 status |= 1;
+            } else {
+                env_recompute_normals(env, last_output);
             }
             continue;
         }
@@ -784,25 +899,32 @@ static int run_batch(int argc, char **argv, Env *env)
             if (!env_remove(env, arg + 7)) {
                 fprintf(stderr, "No definition named %s\n", arg + 7);
                 status |= 1;
+            } else {
+                env_recompute_normals(env, last_output);
             }
             continue;
         }
 
         if (strcmp(arg, "-e") == 0 || strcmp(arg, "--eval") == 0) {
-            if (++i >= argc) return missing_arg(arg);
-            status |= evaluate_source_stdout(argv[i], env);
+            if (++i >= argc) {
+                term_free(last_output);
+                return missing_arg(arg);
+            }
+            status |= evaluate_source_stdout(argv[i], env, &last_output);
             continue;
         }
 
         if (arg[0] == '-') {
             fprintf(stderr, "Unknown option: %s\n", arg);
             fprintf(stderr, "Try '%s --help'.\n", argv[0]);
+            term_free(last_output);
             return 2;
         }
 
-        status |= evaluate_source_stdout(arg, env);
+        status |= evaluate_source_stdout(arg, env, &last_output);
     }
 
+    term_free(last_output);
     return status;
 }
 
@@ -818,11 +940,12 @@ static int run_interactive(Env *env)
     History history;
     history.count = 0;
 
-    printw("Lambda Calculus Beta Reduction\n");
+    printw("Lambda Calculus Beta Reduction %s\n", VERSION);
     printw("Type backslash (\\) to enter λ. Type :help for help, :q to quit.\n\n");
     refresh();
 
     char line[INPUT_CAP];
+    Term *last_output = NULL;
 
     while (read_lambda_line("λ> ", line, sizeof line, &history)) {
         char *input = trim_in_place(line);
@@ -837,6 +960,11 @@ static int run_interactive(Env *env)
 
         if (strcmp(input, ":help") == 0) {
             print_help();
+            continue;
+        }
+
+        if (strcmp(input, ":version") == 0) {
+            printw("lambda %s\n", VERSION);
             continue;
         }
 
@@ -867,25 +995,33 @@ static int run_interactive(Env *env)
 
             if (env_remove(env, name)) {
                 printw("Freed %s.\n", name);
+                env_recompute_normals(env, last_output);
             } else {
                 printw("No definition named %s.\n", name);
             }
             continue;
         }
 
-        char *eq = strchr(input, '=');
-        if (eq) {
+        if (strchr(input, '=') || strstr(input, "<-")) {
             char err[256];
             Term *saved = NULL;
+            int reduced_first = 0;
+            int stopped_early = 0;
 
-            if (!save_definition_from_input(env, input, err, sizeof err, &saved)) {
+            if (!save_definition_from_input(env, input, err, sizeof err,
+                                            last_output, &saved,
+                                            &reduced_first, &stopped_early)) {
                 printw("Definition error: %s\n", err);
                 continue;
             }
 
             char *pretty = term_to_string(saved, 1);
             char *name = trim_in_place(input);
-            printw("Saved %s = %s\n", name, pretty);
+            printw("Saved %s %s %s\n", name, reduced_first ? "<-" : "=", pretty);
+            if (reduced_first && stopped_early) {
+                printw("Stopped after %d steps; term may not have a normal form.\n",
+                       MAX_STEPS);
+            }
             free(pretty);
             continue;
         }
@@ -897,10 +1033,16 @@ static int run_interactive(Env *env)
             continue;
         }
 
-        evaluate_and_print(parsed, env);
+        Term *new_last = NULL;
+        if (evaluate_and_print(parsed, env, last_output, &new_last)) {
+            term_free(last_output);
+            last_output = new_last;
+            env_recompute_normals(env, last_output);
+        }
         term_free(parsed);
     }
 
+    term_free(last_output);
     history_free(&history);
     endwin();
     curses_started = 0;
