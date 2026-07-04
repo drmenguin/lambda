@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#define _XOPEN_SOURCE 700
 #define _XOPEN_SOURCE_EXTENDED 1
 
 #include "lambda.h"
@@ -16,6 +17,7 @@
 #include <locale.h>
 #include <curses.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,9 +27,10 @@
 
 #define INPUT_CAP 4096
 #define HISTORY_CAP 128
+#define SCROLLBACK_CAP 4096
 #define MAX_DEFS 128
 #define MAX_STEPS 300
-#define VERSION "0.1.9"
+#define VERSION "0.1.10"
 #define STEP_PREFIX "→ᵦ "
 
 static int curses_started = 0;
@@ -52,6 +55,13 @@ typedef struct {
     size_t count;
 } History;
 
+typedef struct {
+    char *lines[SCROLLBACK_CAP];
+    size_t count;
+    int scroll;
+    int partial;
+} OutputLog;
+
 static char *xstrdup_main(const char *s)
 {
     size_t n = strlen(s) + 1;
@@ -63,6 +73,312 @@ static char *xstrdup_main(const char *s)
     }
     memcpy(p, s, n);
     return p;
+}
+
+static OutputLog *active_output = NULL;
+
+static void draw_utf8_span(const char *s, int skip_cols, int max_cols)
+{
+    mbstate_t st;
+    memset(&st, 0, sizeof st);
+
+    const char *p = s;
+    int drawn = 0;
+    while (*p && drawn < max_cols) {
+        wchar_t wc;
+        size_t n = mbrtowc(&wc, p, MB_CUR_MAX, &st);
+        if (n == (size_t)-1 || n == (size_t)-2 || n == 0) {
+            memset(&st, 0, sizeof st);
+            if (skip_cols > 0) {
+                skip_cols--;
+                p++;
+                continue;
+            }
+            if (drawn + 1 > max_cols) break;
+            addch((unsigned char)*p);
+            p++;
+            drawn++;
+            continue;
+        }
+
+        int width = wcwidth(wc);
+        if (width < 0) width = 1;
+        if (skip_cols > 0) {
+            skip_cols -= width;
+            if (skip_cols < 0) skip_cols = 0;
+            p += n;
+            continue;
+        }
+        if (drawn + width > max_cols) break;
+        addnwstr(&wc, 1);
+        drawn += width;
+        p += n;
+    }
+}
+
+static int utf8_width(const char *s)
+{
+    mbstate_t st;
+    memset(&st, 0, sizeof st);
+
+    const char *p = s;
+    int cols = 0;
+    while (*p) {
+        wchar_t wc;
+        size_t n = mbrtowc(&wc, p, MB_CUR_MAX, &st);
+        if (n == (size_t)-1 || n == (size_t)-2 || n == 0) {
+            memset(&st, 0, sizeof st);
+            p++;
+            cols++;
+            continue;
+        }
+
+        int width = wcwidth(wc);
+        cols += width < 0 ? 1 : width;
+        p += n;
+    }
+
+    return cols;
+}
+
+static int visual_rows_for_line(const char *s, int cols)
+{
+    if (cols < 1) cols = 1;
+    int width = utf8_width(s);
+    if (width < 1) return 1;
+    return (width + cols - 1) / cols;
+}
+
+static int output_visual_rows(const OutputLog *out, int cols)
+{
+    int rows = 0;
+    for (size_t i = 0; i < out->count; i++) {
+        rows += visual_rows_for_line(out->lines[i], cols);
+    }
+    return rows;
+}
+
+static void output_repaint(void)
+{
+    if (!curses_started || !active_output) return;
+
+    int rows = getmaxy(stdscr) - 1;
+    int cols = getmaxx(stdscr);
+    if (rows < 1) return;
+    if (cols < 1) cols = 1;
+
+    int total_rows = output_visual_rows(active_output, cols);
+    int max_scroll = total_rows - rows;
+    if (max_scroll < 0) max_scroll = 0;
+    if (active_output->scroll > max_scroll) active_output->scroll = max_scroll;
+
+    int end = total_rows - active_output->scroll;
+    if (end < 0) end = 0;
+    int start = end > rows ? end - rows : 0;
+
+    for (int y = 0; y < rows; y++) {
+        move(y, 0);
+        clrtoeol();
+    }
+
+    int visual_y = 0;
+    int screen_y = 0;
+    for (size_t i = 0; i < active_output->count && screen_y < rows; i++) {
+        int line_rows = visual_rows_for_line(active_output->lines[i], cols);
+
+        for (int part = 0; part < line_rows; part++, visual_y++) {
+            if (visual_y < start) continue;
+            if (visual_y >= end) break;
+
+            move(screen_y++, 0);
+            draw_utf8_span(active_output->lines[i], part * cols, cols);
+        }
+    }
+
+    refresh();
+}
+
+static void output_free(OutputLog *out)
+{
+    for (size_t i = 0; i < out->count; i++) free(out->lines[i]);
+}
+
+static void output_clear(OutputLog *out)
+{
+    for (size_t i = 0; i < out->count; i++) free(out->lines[i]);
+    out->count = 0;
+    out->scroll = 0;
+    out->partial = 0;
+    output_repaint();
+}
+
+static void output_new_line(OutputLog *out)
+{
+    if (out->count == SCROLLBACK_CAP) {
+        free(out->lines[0]);
+        memmove(out->lines, out->lines + 1,
+                (SCROLLBACK_CAP - 1) * sizeof out->lines[0]);
+        out->count--;
+    }
+
+    out->lines[out->count++] = xstrdup_main("");
+    out->partial = 1;
+}
+
+static void output_append_bytes(OutputLog *out, const char *s, size_t n)
+{
+    if (!out->partial || out->count == 0) output_new_line(out);
+
+    char *old = out->lines[out->count - 1];
+    size_t old_len = strlen(old);
+    char *new_s = malloc(old_len + n + 1);
+    if (!new_s) {
+        if (curses_started) endwin();
+        fprintf(stderr, "out of memory\n");
+        exit(EXIT_FAILURE);
+    }
+
+    memcpy(new_s, old, old_len);
+    memcpy(new_s + old_len, s, n);
+    new_s[old_len + n] = '\0';
+    free(old);
+    out->lines[out->count - 1] = new_s;
+}
+
+static void output_append_text(OutputLog *out, const char *text)
+{
+    const char *start = text;
+    for (const char *p = text; ; p++) {
+        if (*p == '\n' || *p == '\0') {
+            if (p > start) output_append_bytes(out, start, (size_t)(p - start));
+            if (*p == '\n') {
+                if (!out->partial || out->count == 0) output_new_line(out);
+                out->partial = 0;
+                start = p + 1;
+                continue;
+            }
+            break;
+        }
+    }
+
+    if (out->scroll == 0) output_repaint();
+}
+
+static void output_printf(const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    va_list copy;
+    va_copy(copy, args);
+    int n = vsnprintf(NULL, 0, fmt, copy);
+    va_end(copy);
+
+    if (n < 0) {
+        va_end(args);
+        return;
+    }
+
+    char *buf = malloc((size_t)n + 1);
+    if (!buf) {
+        va_end(args);
+        if (curses_started) endwin();
+        fprintf(stderr, "out of memory\n");
+        exit(EXIT_FAILURE);
+    }
+
+    vsnprintf(buf, (size_t)n + 1, fmt, args);
+    va_end(args);
+
+    if (curses_started && active_output) {
+        output_append_text(active_output, buf);
+    } else if (curses_started) {
+        waddstr(stdscr, buf);
+    } else {
+        printf("%s", buf);
+    }
+
+    free(buf);
+}
+
+static void output_scroll(OutputLog *out, int delta)
+{
+    int rows = getmaxy(stdscr) - 1;
+    int cols = getmaxx(stdscr);
+    if (rows < 1) rows = 1;
+    if (cols < 1) cols = 1;
+
+    int max_scroll = output_visual_rows(out, cols) - rows;
+    if (max_scroll < 0) max_scroll = 0;
+
+    out->scroll += delta;
+    if (out->scroll < 0) out->scroll = 0;
+    if (out->scroll > max_scroll) out->scroll = max_scroll;
+    output_repaint();
+}
+
+static char *input_to_display_string(const char *buf)
+{
+    size_t cap = strlen(buf) * 4 + 1;
+    char *s = malloc(cap);
+    if (!s) {
+        if (curses_started) endwin();
+        fprintf(stderr, "out of memory\n");
+        exit(EXIT_FAILURE);
+    }
+
+    size_t len = 0;
+    int command = buf[0] == ':';
+    int can_subscript = 0;
+    for (size_t i = 0; buf[i]; i++) {
+        unsigned char c = (unsigned char)buf[i];
+        const char *append = NULL;
+        char single[2] = {(char)c, '\0'};
+
+        if (!command && buf[i] == '\\') {
+            append = "λ";
+            can_subscript = 0;
+        } else if (!command && isdigit(c) && can_subscript) {
+            switch (buf[i]) {
+                case '0': append = "₀"; break;
+                case '1': append = "₁"; break;
+                case '2': append = "₂"; break;
+                case '3': append = "₃"; break;
+                case '4': append = "₄"; break;
+                case '5': append = "₅"; break;
+                case '6': append = "₆"; break;
+                case '7': append = "₇"; break;
+                case '8': append = "₈"; break;
+                case '9': append = "₉"; break;
+            }
+        } else {
+            append = single;
+            can_subscript = !command && (isalpha(c) || c == '\'');
+        }
+
+        size_t need = strlen(append);
+        if (len + need + 1 > cap) {
+            while (len + need + 1 > cap) cap *= 2;
+            char *new_s = realloc(s, cap);
+            if (!new_s) {
+                free(s);
+                if (curses_started) endwin();
+                fprintf(stderr, "out of memory\n");
+                exit(EXIT_FAILURE);
+            }
+            s = new_s;
+        }
+        memcpy(s + len, append, need);
+        len += need;
+        s[len] = '\0';
+    }
+
+    return s;
+}
+
+static int output_page_size(void)
+{
+    int page = getmaxy(stdscr) - 2;
+    return page < 1 ? 1 : page;
 }
 
 static void history_free(History *history)
@@ -423,6 +739,32 @@ static int parse_load_path_arg(char *arg, char **path, char *err, size_t errsz)
     return 1;
 }
 
+static char *expand_load_path(const char *path, char *err, size_t errsz)
+{
+    if (path[0] != '~' || (path[1] != '\0' && path[1] != '/')) {
+        return xstrdup_main(path);
+    }
+
+    const char *home = getenv("HOME");
+    if (!home || home[0] == '\0') {
+        snprintf(err, errsz, "cannot expand '~': HOME is not set");
+        return NULL;
+    }
+
+    size_t home_len = strlen(home);
+    size_t rest_len = strlen(path + 1);
+    char *expanded = malloc(home_len + rest_len + 1);
+    if (!expanded) {
+        if (curses_started) endwin();
+        fprintf(stderr, "out of memory\n");
+        exit(EXIT_FAILURE);
+    }
+
+    memcpy(expanded, home, home_len);
+    memcpy(expanded + home_len, path + 1, rest_len + 1);
+    return expanded;
+}
+
 static int valid_def_name(const char *s)
 {
     if (!*s) return 0;
@@ -523,9 +865,7 @@ static void insert_input_char(char *buf, size_t cap, size_t *len, size_t *cursor
 static int read_lambda_line(const char *prompt, char *buf, size_t cap,
                             const History *history)
 {
-    int y, x;
-    getyx(stdscr, y, x);
-    (void)x;
+    int y = getmaxy(stdscr) - 1;
 
     size_t len = 0;
     size_t cursor = 0;
@@ -543,8 +883,11 @@ static int read_lambda_line(const char *prompt, char *buf, size_t cap,
         if (rc == ERR) continue;
 
         if (wc == L'\n' || wc == L'\r' || wc == KEY_ENTER) {
-            addch('\n');
             buf[len] = '\0';
+            if (active_output) active_output->scroll = 0;
+            char *display = input_to_display_string(buf);
+            output_printf("%s%s\n", prompt, display);
+            free(display);
             return 1;
         }
 
@@ -586,6 +929,38 @@ static int read_lambda_line(const char *prompt, char *buf, size_t cap,
                         len--;
                     }
                     break;
+
+                case KEY_PPAGE:
+                    if (active_output) output_scroll(active_output, output_page_size());
+                    break;
+
+                case KEY_NPAGE:
+                    if (active_output) output_scroll(active_output, -output_page_size());
+                    break;
+
+                case KEY_RESIZE:
+                    output_repaint();
+                    y = getmaxy(stdscr) - 1;
+                    break;
+
+#ifdef KEY_MOUSE
+                case KEY_MOUSE: {
+                    MEVENT event;
+                    if (getmouse(&event) == OK && active_output) {
+#ifdef BUTTON4_PRESSED
+                        if (event.bstate & BUTTON4_PRESSED) {
+                            output_scroll(active_output, 3);
+                        }
+#endif
+#ifdef BUTTON5_PRESSED
+                        if (event.bstate & BUTTON5_PRESSED) {
+                            output_scroll(active_output, -3);
+                        }
+#endif
+                    }
+                    break;
+                }
+#endif
 
                 case KEY_UP:
                     if (history->count > 0 && history_pos > 0) {
@@ -650,47 +1025,49 @@ static int read_lambda_line(const char *prompt, char *buf, size_t cap,
 
 static void print_help(void)
 {
-    printw("Reduction uses normal-order beta reduction; steps are shown with →ᵦ\n\n");
-    printw("Commands:\n");
-    printw("  :q             quit\n");
-    printw("  :clear         clear the terminal\n");
-    printw("  :def NAME      show how a saved definition is defined\n");
-    printw("  :defs          show all saved definitions\n");
-    printw("  :free NAME     forget a saved definition\n");
-    printw("  :load FILE     load definitions from FILE\n");
-    printw("  :help          show this help\n");
-    printw("  :version       show version information\n");
-    printw("\n");
-    printw("Keys:\n");
-    printw("  Left/Right     move within the current input\n");
-    printw("  Up/Down        recall previous/next input\n");
-    printw("  Home/End       jump to start/end of input\n");
-    printw("\n");
-    printw("Syntax:\n");
-    printw("  \\x.x           abstraction; displayed as λx.x while typing\n");
-    printw("  x y z          application; left associative: (x y) z\n");
-    printw("  f \\x.x         bare lambda arguments are accepted: f (λx.x)\n");
-    printw("  xx             same as x x; lowercase letters split into variables\n");
-    printw("  x1 x2          subscripted variables; displayed as x₁ x₂\n");
-    printw("  KI, Ki         uppercase-starting names stay as one identifier\n");
-    printw("  (\\x.x) y       beta-reduces to y\n");
-    printw("  M = \\x.x       save a named definition\n");
-    printw("  M <- (\\x.x) y  reduce first, then save the result as M\n");
-    printw("  %%              previous reduction result\n");
-    printw("  M y            use a named definition\n");
-    printw("  :def M         show how M is defined\n");
-    printw("  :free M        remove a saved definition\n");
-    printw("\n");
-    printw("Other:\n");
-    printw("  [M, N]         shown beside terms alpha-equivalent to saved definitions\n");
-    printw("  [M*]           M reduces to the displayed term\n");
-    printw("\n");
+    output_printf("Reduction uses normal-order beta reduction; steps are shown with →ᵦ\n\n");
+    output_printf("Commands:\n");
+    output_printf("  :q             quit\n");
+    output_printf("  :clear         clear the terminal and scrollback\n");
+    output_printf("  :def NAME      show how a saved definition is defined\n");
+    output_printf("  :defs          show all saved definitions\n");
+    output_printf("  :free NAME     forget a saved definition\n");
+    output_printf("  :load FILE     load definitions from FILE\n");
+    output_printf("  :help          show this help\n");
+    output_printf("  :version       show version information\n");
+    output_printf("\n");
+    output_printf("Keys:\n");
+    output_printf("  Left/Right     move within the current input\n");
+    output_printf("  Up/Down        recall previous/next input\n");
+    output_printf("  PageUp/PageDown scroll through previous output\n");
+    output_printf("  Mouse wheel    scroll through previous output\n");
+    output_printf("  Home/End       jump to start/end of input\n");
+    output_printf("\n");
+    output_printf("Syntax:\n");
+    output_printf("  \\x.x           abstraction; displayed as λx.x while typing\n");
+    output_printf("  x y z          application; left associative: (x y) z\n");
+    output_printf("  f \\x.x         bare lambda arguments are accepted: f (λx.x)\n");
+    output_printf("  xx             same as x x; lowercase letters split into variables\n");
+    output_printf("  x1 x2          subscripted variables; displayed as x₁ x₂\n");
+    output_printf("  KI, Ki         uppercase-starting names stay as one identifier\n");
+    output_printf("  (\\x.x) y       beta-reduces to y\n");
+    output_printf("  M = \\x.x       save a named definition\n");
+    output_printf("  M <- (\\x.x) y  reduce first, then save the result as M\n");
+    output_printf("  %%              previous reduction result\n");
+    output_printf("  M y            use a named definition\n");
+    output_printf("  :def M         show how M is defined\n");
+    output_printf("  :free M        remove a saved definition\n");
+    output_printf("\n");
+    output_printf("Other:\n");
+    output_printf("  [M, N]         shown beside terms alpha-equivalent to saved definitions\n");
+    output_printf("  [M*]           M reduces to the displayed term\n");
+    output_printf("\n");
 }
 
 static void print_definition(const Definition *def, const char *indent)
 {
     char *s = term_to_string(def->term, 1);
-    printw("%s%s = %s\n", indent, def->name, s);
+    output_printf("%s%s = %s\n", indent, def->name, s);
     free(s);
 }
 
@@ -698,13 +1075,13 @@ static void show_def(const Env *env, const char *name)
 {
     ssize_t idx = env_find(env, name);
     if (idx < 0) {
-        printw("No definition named %s.\n", name);
+        output_printf("No definition named %s.\n", name);
         return;
     }
 
     const Definition *def = &env->items[idx];
     if (def->reduced_first) {
-        printw("%s <- %s  (as defined)\n",
+        output_printf("%s <- %s  (as defined)\n",
                def->name, def->original_rhs ? def->original_rhs : "");
     }
 
@@ -728,7 +1105,7 @@ static int source_seen_before(const Env *env, size_t idx)
 static void show_defs(const Env *env)
 {
     if (env->count == 0) {
-        printw("No definitions.\n");
+        output_printf("No definitions.\n");
         return;
     }
 
@@ -744,8 +1121,8 @@ static void show_defs(const Env *env)
         const char *source = env->items[i].source;
         if (!source || source_seen_before(env, i)) continue;
 
-        if (any_manual || printed_file_group) printw("\n");
-        printw("%s:\n", source);
+        if (any_manual || printed_file_group) output_printf("\n");
+        output_printf("%s:\n", source);
         for (size_t j = i; j < env->count; j++) {
             if (env->items[j].source &&
                 strcmp(env->items[j].source, source) == 0) {
@@ -834,22 +1211,21 @@ static void print_term_with_matches(const char *prefix, const Term *term, const 
     char *s = term_to_string(term, 1);
     char *matches = alpha_matches_to_string(term, env);
 
-    if (matches[0] == '\0' && curses_started) {
-        printw("%s%s\n", prefix, s);
-    } else if (curses_started) {
-        int y, x;
+    if (curses_started) {
         int width = getmaxx(stdscr);
-        printw("%s%s", prefix, s);
-        getyx(stdscr, y, x);
 
-        int match_len = (int)strlen(matches);
-        if (x + 1 + match_len < width) {
-            move(y, width - match_len);
-            printw("%s", matches);
+        if (matches[0] == '\0') {
+            output_printf("%s%s\n", prefix, s);
         } else {
-            printw(" %s", matches);
+            int base_width = utf8_width(prefix) + utf8_width(s);
+            int match_width = utf8_width(matches);
+            if (base_width + 1 + match_width < width) {
+                int padding = width - base_width - match_width;
+                output_printf("%s%s%*s%s\n", prefix, s, padding, "", matches);
+            } else {
+                output_printf("%s%s %s\n", prefix, s, matches);
+            }
         }
-        addch('\n');
     } else {
         printf("%s%s", prefix, s);
         if (matches[0] != '\0') {
@@ -871,13 +1247,13 @@ static int evaluate_and_print(Term *parsed, const Env *env,
     Term *shallow = expand_defs_shallow(parsed, env, last_output,
                                         &shallow_changed, err, sizeof err);
     if (!shallow) {
-        printw("Expansion error: %s\n", err);
+        output_printf("Expansion error: %s\n", err);
         return 0;
     }
 
     Term *expanded = expand_defs(parsed, env, last_output, err, sizeof err);
     if (!expanded) {
-        printw("Expansion error: %s\n", err);
+        output_printf("Expansion error: %s\n", err);
         term_free(shallow);
         return 0;
     }
@@ -908,7 +1284,7 @@ static int evaluate_and_print(Term *parsed, const Env *env,
         print_term_with_matches(STEP_PREFIX, current, env);
 
         if (step == MAX_STEPS) {
-            printw("Stopped after %d steps; term may not have a normal form.\n", MAX_STEPS);
+            output_printf("Stopped after %d steps; term may not have a normal form.\n", MAX_STEPS);
         }
     }
 
@@ -998,11 +1374,16 @@ static int load_definitions_from_file(Env *env, const char *path,
                                       size_t *imported,
                                       char *err, size_t errsz)
 {
-    FILE *f = fopen(path, "r");
+    char *open_path = expand_load_path(path, err, errsz);
+    if (!open_path) return 0;
+
+    FILE *f = fopen(open_path, "r");
     if (!f) {
         snprintf(err, errsz, "%s: %s", path, strerror(errno));
+        free(open_path);
         return 0;
     }
+    free(open_path);
 
     char line[INPUT_CAP];
     size_t line_no = 0;
@@ -1257,12 +1638,19 @@ static int run_interactive(Env *env)
     noecho();
     keypad(stdscr, TRUE);
     scrollok(stdscr, TRUE);
+#ifdef ALL_MOUSE_EVENTS
+    mousemask(ALL_MOUSE_EVENTS, NULL);
+#endif
 
     History history;
     history.count = 0;
 
-    printw("Lambda Calculus Beta Reduction %s\n", VERSION);
-    printw("Type backslash (\\) to enter λ. Type :help for help, :q to quit.\n\n");
+    OutputLog output;
+    memset(&output, 0, sizeof output);
+    active_output = &output;
+
+    output_printf("Lambda Calculus Beta Reduction %s\n", VERSION);
+    output_printf("Type backslash (\\) to enter λ. Type :help for help, :q to quit.\n\n");
     refresh();
 
     char line[INPUT_CAP];
@@ -1285,12 +1673,14 @@ static int run_interactive(Env *env)
         }
 
         if (strcmp(input, ":version") == 0) {
-            printw("lambda %s\n", VERSION);
+            output_printf("lambda %s\n", VERSION);
             continue;
         }
 
         if (strcmp(input, ":clear") == 0) {
-            clear();
+            output_clear(&output);
+            move(getmaxy(stdscr) - 1, 0);
+            clrtoeol();
             refresh();
             continue;
         }
@@ -1305,12 +1695,12 @@ static int run_interactive(Env *env)
             char *name = trim_in_place(input + 4);
 
             if (*name == '\0') {
-                printw("Usage: :def NAME\n");
+                output_printf("Usage: :def NAME\n");
                 continue;
             }
 
             if (!valid_def_name(name)) {
-                printw("Invalid definition name: %s\n", name);
+                output_printf("Invalid definition name: %s\n", name);
                 continue;
             }
 
@@ -1324,8 +1714,8 @@ static int run_interactive(Env *env)
             char path_err[256];
 
             if (!parse_load_path_arg(input + 5, &path, path_err, sizeof path_err)) {
-                printw("Usage: :load FILE\n");
-                printw("Load error: %s\n", path_err);
+                output_printf("Usage: :load FILE\n");
+                output_printf("Load error: %s\n", path_err);
                 continue;
             }
 
@@ -1333,11 +1723,11 @@ static int run_interactive(Env *env)
             size_t imported = 0;
             if (!load_definitions_from_file(env, path, last_output,
                                             &imported, err, sizeof err)) {
-                printw("Load error: %s\n", err);
+                output_printf("Load error: %s\n", err);
                 continue;
             }
 
-            printw("Imported %zu definition%s from %s, type :defs to see %s.\n",
+            output_printf("Imported %zu definition%s from %s, type :defs to see %s.\n",
                    imported, imported == 1 ? "" : "s", path,
                    imported == 1 ? "it" : "them");
             continue;
@@ -1348,20 +1738,20 @@ static int run_interactive(Env *env)
             char *name = trim_in_place(input + 5);
 
             if (*name == '\0') {
-                printw("Usage: :free NAME\n");
+                output_printf("Usage: :free NAME\n");
                 continue;
             }
 
             if (!valid_def_name(name)) {
-                printw("Invalid definition name: %s\n", name);
+                output_printf("Invalid definition name: %s\n", name);
                 continue;
             }
 
             if (env_remove(env, name)) {
-                printw("Freed %s.\n", name);
+                output_printf("Freed %s.\n", name);
                 env_recompute_normals(env, last_output);
             } else {
-                printw("No definition named %s.\n", name);
+                output_printf("No definition named %s.\n", name);
             }
             continue;
         }
@@ -1376,15 +1766,15 @@ static int run_interactive(Env *env)
                                             last_output, &saved,
                                             &reduced_first, &stopped_early,
                                             NULL)) {
-                printw("Definition error: %s\n", err);
+                output_printf("Definition error: %s\n", err);
                 continue;
             }
 
             char *pretty = term_to_string(saved, 1);
             char *name = trim_in_place(input);
-            printw("Saved %s %s %s\n", name, reduced_first ? "<-" : "=", pretty);
+            output_printf("Saved %s %s %s\n", name, reduced_first ? "<-" : "=", pretty);
             if (reduced_first && stopped_early) {
-                printw("Stopped after %d steps; term may not have a normal form.\n",
+                output_printf("Stopped after %d steps; term may not have a normal form.\n",
                        MAX_STEPS);
             }
             free(pretty);
@@ -1394,7 +1784,7 @@ static int run_interactive(Env *env)
         char err[256];
         Term *parsed = parse_lambda(input, err, sizeof err);
         if (!parsed) {
-            printw("Parse error: %s\n", err);
+            output_printf("Parse error: %s\n", err);
             continue;
         }
 
@@ -1409,6 +1799,8 @@ static int run_interactive(Env *env)
 
     term_free(last_output);
     history_free(&history);
+    output_free(&output);
+    active_output = NULL;
     endwin();
     curses_started = 0;
     return 0;

@@ -1,4 +1,4 @@
-.TH LAMBDA 1 "July 2026" "lambda 0.1.9" "User Commands"
+.TH LAMBDA 1 "July 2026" "lambda 0.1.10" "User Commands"
 .\" Copyright (C) 2026 Luke Collins
 .\" SPDX-License-Identifier: GPL-3.0-or-later
 .SH NAME
@@ -82,9 +82,12 @@ Quoted paths and backslash escapes are accepted, for example
 .B ":load \(dqmy file.lc\(dq"
 or
 .BR ":load my\\ file.lc" .
+Leading
+.B ~/
+is expanded to the current user's home directory.
 .TP
 .B :clear
-Clear the terminal.
+Clear the terminal and scrollback.
 .TP
 .B :help
 Show interactive help.
@@ -94,6 +97,13 @@ Show version information.
 .TP
 .B :q
 Quit.
+.SH INTERACTIVE KEYS
+.TP
+.B PageUp, PageDown
+Scroll through previous interactive output.
+.TP
+.B Mouse wheel
+Scroll through previous interactive output when supported by the terminal.
 .SH SYNTAX
 .TP
 .B \ex.x

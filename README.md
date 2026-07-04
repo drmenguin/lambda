@@ -37,11 +37,15 @@ and save the result. In the interactive interface and in multi-expression
 `lambda` invocations, `%` refers to the previous reduction result.
 Use `:load FILE` or `lambda --load FILE` to import definitions from a file.
 Interactive `:load` accepts quoted paths like `:load "my file.lc"` and
-backslash-escaped spaces like `:load my\ file.lc`. Definition files are read
-line by line; blank lines and lines starting with `#` are ignored. Loaded
-definitions are grouped by filename in `:defs`.
+backslash-escaped spaces like `:load my\ file.lc`. Leading `~/` is expanded
+to your home directory for both `:load` and `lambda --load`. Definition files
+are read line by line; blank lines and lines starting with `#` are ignored.
+Loaded definitions are grouped by filename in `:defs`.
 Use `:def NAME` to show one saved definition without expanding it; eager
 definitions also show the original expression they were reduced from.
+In the ncurses interface, use PageUp/PageDown or the mouse wheel to scroll
+through previous output. `:clear` clears both the terminal and the internal
+scrollback.
 
 When a displayed term is alpha-equivalent to saved definitions, `lambda` shows
 the matching names beside it. A `*` means the saved definition reduces to the
