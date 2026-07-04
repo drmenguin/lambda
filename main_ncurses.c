@@ -647,6 +647,72 @@ static Term *expand_defs_shallow(const Term *t, const Env *env,
                                    changed, err, errsz);
 }
 
+static Term *capture_last_output_refs_rec(const Term *t,
+                                          const Term *last_output,
+                                          const char **bound, size_t nbound,
+                                          char *err, size_t errsz)
+{
+    switch (t->type) {
+        case TERM_VAR: {
+            const char *name = t->as.var.name;
+
+            if (name_in_list(name, bound, nbound)) {
+                return term_clone(t);
+            }
+
+            if (strcmp(name, "%") == 0) {
+                if (!last_output) {
+                    snprintf(err, errsz, "no previous reduction for '%%'");
+                    return NULL;
+                }
+                return term_clone(last_output);
+            }
+
+            return term_clone(t);
+        }
+
+        case TERM_APP: {
+            Term *l = capture_last_output_refs_rec(t->as.app.left, last_output,
+                                                   bound, nbound, err, errsz);
+            if (!l) return NULL;
+            Term *r = capture_last_output_refs_rec(t->as.app.right, last_output,
+                                                   bound, nbound, err, errsz);
+            if (!r) {
+                term_free(l);
+                return NULL;
+            }
+            return term_app(l, r);
+        }
+
+        case TERM_ABS: {
+            const char *new_bound[256];
+            if (nbound >= 256) {
+                snprintf(err, errsz, "too many nested binders");
+                return NULL;
+            }
+            for (size_t i = 0; i < nbound; i++) new_bound[i] = bound[i];
+            new_bound[nbound] = t->as.abs.param;
+
+            Term *body = capture_last_output_refs_rec(t->as.abs.body,
+                                                      last_output,
+                                                      new_bound, nbound + 1,
+                                                      err, errsz);
+            if (!body) return NULL;
+            return term_abs(t->as.abs.param, body);
+        }
+    }
+
+    return NULL;
+}
+
+static Term *capture_last_output_refs(const Term *t, const Term *last_output,
+                                      char *err, size_t errsz)
+{
+    const char *bound[1];
+    if (err && errsz) err[0] = '\0';
+    return capture_last_output_refs_rec(t, last_output, bound, 0, err, errsz);
+}
+
 static Term *reduce_expanded_normal_form(const Term *t, const Env *env,
                                          const Term *last_output,
                                          int *stopped_early,
@@ -1325,6 +1391,11 @@ static int save_definition_from_input(Env *env, char *input, char *err, size_t e
 
     Term *t = parse_lambda(rhs, err, errsz);
     if (!t) return 0;
+
+    Term *captured = capture_last_output_refs(t, last_output, err, errsz);
+    term_free(t);
+    if (!captured) return 0;
+    t = captured;
 
     if (reduce_first) {
         int stopped = 0;

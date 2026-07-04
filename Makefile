@@ -54,6 +54,8 @@ check: all
 		./lambda --load "$$tmpfile" '\f x.f x' | grep -F 'λf x.f x    [One*]'; \
 		rm -f "$$tmpfile"
 	./lambda '(\x.x) y' '%' | grep -F '  y'
+	./lambda '(\x.x) y' --define 'Saved=%' Saved | grep -F '  y    [Saved]'
+	./lambda '(\x.x) y' --define 'Saved<-%' Saved | grep -F '  y    [Saved]'
 	./lambda-cli --eval '(\x.x) y' | grep -F '→ᵦ y'
 	groff -man -Tutf8 lambda.1 >/dev/null
 	groff -man -Tutf8 lambda-cli.1 >/dev/null
