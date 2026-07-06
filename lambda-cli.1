@@ -29,7 +29,7 @@ performs gradual reduction by one or
 .I N
 steps; a displayed
 .B (...)
-means more beta steps remain.
+means more reduction steps remain.
 .PP
 This command is the minimal non-ncurses front end. Use
 .BR lambda (1)
@@ -81,14 +81,14 @@ Result from numbered output line
 .B TERM /
 Reduce
 .I TERM
-by one beta step and stop.
+by one reduction step and stop.
 .TP
 .BI TERM\ / N
-Reduce
+Show
 .I TERM
-by
+for
 .I N
-beta steps and stop.
+reduction steps, then stop.
 .TP
 .BI / N
 Continue the previous gradual reduction by

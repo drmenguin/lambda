@@ -1,5 +1,5 @@
 /*
- * lambda - lambda calculus beta-reduction playground
+ * lambda - lambda calculus beta reduction playground with optional eta
  *
  * Copyright (C) 2026 Luke Collins
  * Website: https://lc.mt
@@ -704,9 +704,11 @@ static Term *substitute(const Term *body, const char *x, const Term *replacement
 
 /* Reduction --------------------------------------------------------------- */
 
-Term *term_reduce_once(const Term *t, int *changed)
+Term *term_reduce_once_kind(const Term *t, int *changed, ReductionKind *kind,
+                            int eta_enabled)
 {
     if (changed) *changed = 0;
+    if (kind) *kind = REDUCTION_NONE;
 
     switch (t->type) {
         case TERM_VAR:
@@ -718,21 +720,28 @@ Term *term_reduce_once(const Term *t, int *changed)
 
             if (left->type == TERM_ABS) {
                 if (changed) *changed = 1;
+                if (kind) *kind = REDUCTION_BETA;
                 return substitute(left->as.abs.body, left->as.abs.param, right);
             }
 
             int left_changed = 0;
-            Term *new_left = term_reduce_once(left, &left_changed);
+            ReductionKind left_kind = REDUCTION_NONE;
+            Term *new_left = term_reduce_once_kind(left, &left_changed,
+                                                   &left_kind, eta_enabled);
             if (left_changed) {
                 if (changed) *changed = 1;
+                if (kind) *kind = left_kind;
                 return term_app(new_left, term_clone(right));
             }
             term_free(new_left);
 
             int right_changed = 0;
-            Term *new_right = term_reduce_once(right, &right_changed);
+            ReductionKind right_kind = REDUCTION_NONE;
+            Term *new_right = term_reduce_once_kind(right, &right_changed,
+                                                     &right_kind, eta_enabled);
             if (right_changed) {
                 if (changed) *changed = 1;
+                if (kind) *kind = right_kind;
                 return term_app(term_clone(left), new_right);
             }
             term_free(new_right);
@@ -741,22 +750,44 @@ Term *term_reduce_once(const Term *t, int *changed)
         }
 
         case TERM_ABS: {
+            const char *param = t->as.abs.param;
+            const Term *body = t->as.abs.body;
+
+            if (eta_enabled &&
+                body->type == TERM_APP &&
+                body->as.app.right->type == TERM_VAR &&
+                streq(body->as.app.right->as.var.name, param) &&
+                !term_free_in(param, body->as.app.left)) {
+                if (changed) *changed = 1;
+                if (kind) *kind = REDUCTION_ETA;
+                return term_clone(body->as.app.left);
+            }
+
             int body_changed = 0;
-            Term *new_body = term_reduce_once(t->as.abs.body, &body_changed);
+            ReductionKind body_kind = REDUCTION_NONE;
+            Term *new_body = term_reduce_once_kind(body, &body_changed,
+                                                   &body_kind, eta_enabled);
             if (body_changed) {
                 if (changed) *changed = 1;
+                if (kind) *kind = body_kind;
                 return term_abs(t->as.abs.param, new_body);
             }
             term_free(new_body);
-            return term_abs(t->as.abs.param, term_clone(t->as.abs.body));
+            return term_abs(t->as.abs.param, term_clone(body));
         }
     }
 
     return NULL;
 }
 
-Term *term_reduce_normal_order(const Term *t, int max_steps,
-                               int *steps, int *stopped_early)
+Term *term_reduce_once(const Term *t, int *changed)
+{
+    return term_reduce_once_kind(t, changed, NULL, 0);
+}
+
+Term *term_reduce_normal_order_with_eta(const Term *t, int max_steps,
+                                        int *steps, int *stopped_early,
+                                        int eta_enabled)
 {
     if (max_steps <= 0) max_steps = LAMBDA_DEFAULT_MAX_STEPS;
     if (steps) *steps = 0;
@@ -766,7 +797,8 @@ Term *term_reduce_normal_order(const Term *t, int max_steps,
 
     for (int i = 0; i < max_steps; i++) {
         int changed = 0;
-        Term *next = term_reduce_once(current, &changed);
+        Term *next = term_reduce_once_kind(current, &changed, NULL,
+                                           eta_enabled);
 
         if (!changed) {
             term_free(next);
@@ -780,6 +812,13 @@ Term *term_reduce_normal_order(const Term *t, int max_steps,
 
     if (stopped_early) *stopped_early = 1;
     return current;
+}
+
+Term *term_reduce_normal_order(const Term *t, int max_steps,
+                               int *steps, int *stopped_early)
+{
+    return term_reduce_normal_order_with_eta(t, max_steps, steps,
+                                             stopped_early, 0);
 }
 
 /* Pretty-printer ---------------------------------------------------------- */

@@ -21,7 +21,8 @@
 #define DEFAULT_MAX_STEPS LAMBDA_DEFAULT_MAX_STEPS
 #define LINE_CAP 4096
 #define VERSION "0.1.14"
-#define STEP_PREFIX " →ᵦ "
+#define STEP_PREFIX_BETA " →ᵦ "
+#define STEP_PREFIX_ETA " →η "
 
 typedef struct {
     Term **items;
@@ -260,9 +261,19 @@ static void print_term(const char *prefix, const Term *term)
 static int term_can_reduce(const Term *term)
 {
     int changed = 0;
-    Term *next = term_reduce_once(term, &changed);
+    Term *next = term_reduce_once_kind(term, &changed, NULL, 0);
     term_free(next);
     return changed;
+}
+
+static const char *reduction_prefix(ReductionKind kind)
+{
+    return kind == REDUCTION_ETA ? STEP_PREFIX_ETA : STEP_PREFIX_BETA;
+}
+
+static const char *reduction_marker(ReductionKind kind)
+{
+    return kind == REDUCTION_ETA ? "η" : "ᵦ";
 }
 
 static void print_numbered_term(LineResults *lines, const char *marker,
@@ -274,13 +285,15 @@ static void print_numbered_term(LineResults *lines, const char *marker,
     free(s);
 }
 
-static int reduce_steps_from(Term **current, int step_limit)
+static int reduce_steps_and_print(Term **current, int step_limit,
+                                  LineResults *lines)
 {
     int steps_taken = 0;
 
     for (int step = 1; step <= step_limit; step++) {
         int changed = 0;
-        Term *next = term_reduce_once(*current, &changed);
+        ReductionKind kind = REDUCTION_NONE;
+        Term *next = term_reduce_once_kind(*current, &changed, &kind, 0);
         if (!changed) {
             term_free(next);
             break;
@@ -289,6 +302,15 @@ static int reduce_steps_from(Term **current, int step_limit)
         term_free(*current);
         *current = next;
         steps_taken++;
+
+        int more = term_can_reduce(*current);
+        if (more && step < step_limit) {
+            print_term(reduction_prefix(kind), *current);
+        } else {
+            print_numbered_term(lines, reduction_marker(kind), *current,
+                                more ? "  (...)" : "");
+            break;
+        }
     }
 
     return steps_taken;
@@ -317,12 +339,9 @@ static int reduce_and_print(char *source, int max_steps,
         }
 
         Term *current = term_clone(session->current);
-        int steps = reduce_steps_from(&current, step_limit);
+        int steps = reduce_steps_and_print(&current, step_limit, lines);
         if (steps == 0) {
             printf("Already in normal form.\n");
-        } else {
-            print_numbered_term(lines, "ᵦ", current,
-                                term_can_reduce(current) ? "  (...)" : "");
         }
         step_session_set(session, current);
         replace_term(last_output, current);
@@ -348,11 +367,7 @@ static int reduce_and_print(char *source, int max_steps,
     current = expanded;
 
     if (step_limit) {
-        int steps = reduce_steps_from(&current, step_limit);
-        if (steps > 0) {
-            print_numbered_term(lines, "ᵦ", current,
-                                term_can_reduce(current) ? "  (...)" : "");
-        }
+        reduce_steps_and_print(&current, step_limit, lines);
         step_session_set(session, current);
         replace_term(last_output, current);
         if (out_result) *out_result = term_clone(current);
@@ -369,7 +384,8 @@ static int reduce_and_print(char *source, int max_steps,
     int numbered_printed = 0;
     for (int step = 1; step <= max_steps; step++) {
         int changed = 0;
-        Term *next = term_reduce_once(current, &changed);
+        ReductionKind kind = REDUCTION_NONE;
+        Term *next = term_reduce_once_kind(current, &changed, &kind, 0);
         if (!changed) {
             term_free(next);
             break;
@@ -380,9 +396,9 @@ static int reduce_and_print(char *source, int max_steps,
 
         int more = term_can_reduce(current);
         if (more && step < max_steps) {
-            print_term(STEP_PREFIX, current);
+            print_term(reduction_prefix(kind), current);
         } else {
-            print_numbered_term(lines, "ᵦ", current,
+            print_numbered_term(lines, reduction_marker(kind), current,
                                 more ? "  (...)" : "");
             numbered_printed = 1;
         }
@@ -394,7 +410,7 @@ static int reduce_and_print(char *source, int max_steps,
     }
 
     if (!numbered_printed) {
-        /* No beta step was printed, so the original term is already the result. */
+        /* No reduction step was printed, so the original term is already the result. */
         print_numbered_term(lines, "", current, "");
     }
     replace_term(last_output, current);

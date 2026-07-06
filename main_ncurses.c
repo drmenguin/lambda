@@ -1,5 +1,5 @@
 /*
- * lambda - interactive lambda calculus beta-reduction playground
+ * lambda - interactive lambda calculus beta reduction playground with optional eta
  *
  * Copyright (C) 2026 Luke Collins
  * Website: https://lc.mt
@@ -33,7 +33,8 @@
 #define MAX_DEFS 128
 #define DEFAULT_MAX_STEPS LAMBDA_DEFAULT_MAX_STEPS
 #define VERSION "0.1.14"
-#define STEP_PREFIX " →ᵦ "
+#define STEP_PREFIX_BETA " →ᵦ "
+#define STEP_PREFIX_ETA " →η "
 #ifndef LAMBDA_DATADIR
 #define LAMBDA_DATADIR "/usr/share/lambda"
 #endif
@@ -79,6 +80,7 @@ typedef struct {
 
 typedef struct {
     int max_steps;
+    int eta_enabled;
 } Settings;
 
 static char *xstrdup_main(const char *s)
@@ -344,6 +346,7 @@ static char *input_to_display_string(const char *buf)
         fprintf(stderr, "out of memory\n");
         exit(EXIT_FAILURE);
     }
+    s[0] = '\0';
 
     size_t len = 0;
     int command = buf[0] == ':';
@@ -844,7 +847,7 @@ static Term *capture_last_output_refs(const Term *t, const Term *last_output,
 
 static Term *reduce_expanded_normal_form(const Term *t, const Env *env,
                                          const Term *last_output,
-                                         int max_steps,
+                                         int max_steps, int eta_enabled,
                                          int *stopped_early,
                                          char *err, size_t errsz)
 {
@@ -852,15 +855,16 @@ static Term *reduce_expanded_normal_form(const Term *t, const Env *env,
     if (!expanded) return NULL;
 
     int steps = 0;
-    Term *normal = term_reduce_normal_order(expanded, max_steps, &steps,
-                                            stopped_early);
+    Term *normal = term_reduce_normal_order_with_eta(expanded, max_steps,
+                                                     &steps, stopped_early,
+                                                     eta_enabled);
     (void)steps;
     term_free(expanded);
     return normal;
 }
 
 static void env_recompute_normals(Env *env, const Term *last_output,
-                                  int max_steps)
+                                  int max_steps, int eta_enabled)
 {
     for (size_t i = 0; i < env->count; i++) {
         char err[256];
@@ -870,6 +874,7 @@ static void env_recompute_normals(Env *env, const Term *last_output,
         env->items[i].normal = reduce_expanded_normal_form(env->items[i].term,
                                                            env, last_output,
                                                            max_steps,
+                                                           eta_enabled,
                                                            &stopped_early,
                                                            err, sizeof err);
         env->items[i].normal_stopped = env->items[i].normal ? stopped_early : 0;
@@ -1304,7 +1309,7 @@ static int read_lambda_line(const char *prompt, char *buf, size_t cap,
 
 static void print_help(void)
 {
-    output_printf("Reduction uses normal-order beta reduction; final results are numbered as [N]>\n\n");
+    output_printf("Reduction uses normal-order beta reduction; :eta toggles eta reduction.\n\n");
     output_printf("Commands:\n");
     output_printf("  :q             quit\n");
     output_printf("  :clear         clear the terminal and scrollback\n");
@@ -1313,6 +1318,7 @@ static void print_help(void)
     output_printf("  :free NAME     forget a saved definition\n");
     output_printf("  :load FILE     load definitions from FILE\n");
     output_printf("  :load std      load std.lc: combinators, booleans, numbers, pairs, lists\n");
+    output_printf("  :eta [on|off]  toggle or set eta reduction (default off)\n");
     output_printf("  :max-steps [N] show or set the reduction step limit (default %d)\n",
                   DEFAULT_MAX_STEPS);
     output_printf("  :help          show this help\n");
@@ -1332,15 +1338,15 @@ static void print_help(void)
     output_printf("  xx             same as x x; lowercase letters split into variables\n");
     output_printf("  x1 x2          subscripted variables; displayed as x₁ x₂\n");
     output_printf("  KI, Ki         uppercase-starting names stay as one identifier\n");
-    output_printf("  (\\x.x) y       beta-reduces to y\n");
+    output_printf("  (\\x.x) y       reduces to y\n");
     output_printf("  M = \\x.x       save a named definition\n");
     output_printf("  M <- (\\x.x) y  reduce first, then save the result as M\n");
     output_printf("  %%              previous numbered output result\n");
-    output_printf("  %%2             result from numbered output line 2\n");
-    output_printf("  %% refs          reserved; not valid lambda parameters\n");
-    output_printf("  term /          reduce term by one beta step; (...) means more steps remain\n");
-    output_printf("  term /2         reduce term by two beta steps and stop\n");
-    output_printf("  /2 or Enter     continue the previous gradual reduction\n");
+    output_printf("  %%n             result from output line number n\n");
+    output_printf("  M/             reduce M by one reduction step; (...) means more steps remain\n");
+    output_printf("  M/n            show n reduction steps and stop\n");
+    output_printf("  / or <Enter>   continue the previous gradual reduction\n");
+    output_printf("  /n             continue with n reduction steps\n");
     output_printf("  M y            use a named definition\n");
     output_printf("  :def M         show how M is defined\n");
     output_printf("  :free M        remove a saved definition\n");
@@ -1532,12 +1538,22 @@ static void print_term_with_matches(const char *prefix, const Term *term, const 
     print_term_with_matches_suffix(prefix, term, env, "");
 }
 
-static int term_can_reduce(const Term *term)
+static int term_can_reduce(const Term *term, int eta_enabled)
 {
     int changed = 0;
-    Term *next = term_reduce_once(term, &changed);
+    Term *next = term_reduce_once_kind(term, &changed, NULL, eta_enabled);
     term_free(next);
     return changed;
+}
+
+static const char *reduction_prefix(ReductionKind kind)
+{
+    return kind == REDUCTION_ETA ? STEP_PREFIX_ETA : STEP_PREFIX_BETA;
+}
+
+static const char *reduction_marker(ReductionKind kind)
+{
+    return kind == REDUCTION_ETA ? "η" : "ᵦ";
 }
 
 static void print_numbered_term(LineResults *lines, const char *marker,
@@ -1550,13 +1566,17 @@ static void print_numbered_term(LineResults *lines, const char *marker,
     print_term_with_matches_suffix(prefix, term, env, suffix);
 }
 
-static int reduce_steps_from(Term **current, int step_limit)
+static int reduce_steps_and_print(Term **current, int step_limit,
+                                  LineResults *lines, const Env *env,
+                                  int eta_enabled)
 {
     int steps_taken = 0;
 
     for (int step = 1; step <= step_limit; step++) {
         int changed = 0;
-        Term *next = term_reduce_once(*current, &changed);
+        ReductionKind kind = REDUCTION_NONE;
+        Term *next = term_reduce_once_kind(*current, &changed, &kind,
+                                           eta_enabled);
         if (!changed) {
             term_free(next);
             break;
@@ -1565,6 +1585,15 @@ static int reduce_steps_from(Term **current, int step_limit)
         term_free(*current);
         *current = next;
         steps_taken++;
+
+        int more = term_can_reduce(*current, eta_enabled);
+        if (more && step < step_limit) {
+            print_term_with_matches(reduction_prefix(kind), *current, env);
+        } else {
+            print_numbered_term(lines, reduction_marker(kind), *current, env,
+                                more ? "  (...)" : "");
+            break;
+        }
     }
 
     return steps_taken;
@@ -1574,6 +1603,7 @@ static int evaluate_and_print(Term *parsed, const Env *env,
                               const Term *last_output,
                               LineResults *lines,
                               int max_steps, int step_limit,
+                              int eta_enabled,
                               Term **out_final)
 {
     char err[256];
@@ -1601,16 +1631,12 @@ static int evaluate_and_print(Term *parsed, const Env *env,
     }
 
     if (shallow_changed && !term_alpha_equivalent(shallow, current)) {
-        print_term_with_matches(STEP_PREFIX, current, env);
+        print_term_with_matches(STEP_PREFIX_BETA, current, env);
     }
     term_free(shallow);
 
     if (step_limit) {
-        int steps = reduce_steps_from(&current, step_limit);
-        if (steps > 0) {
-            print_numbered_term(lines, "ᵦ", current, env,
-                                term_can_reduce(current) ? "  (...)" : "");
-        }
+        reduce_steps_and_print(&current, step_limit, lines, env, eta_enabled);
         if (out_final) *out_final = term_clone(current);
         term_free(current);
         return 1;
@@ -1619,7 +1645,9 @@ static int evaluate_and_print(Term *parsed, const Env *env,
     int numbered_printed = 0;
     for (int step = 1; step <= max_steps; step++) {
         int changed = 0;
-        Term *next = term_reduce_once(current, &changed);
+        ReductionKind kind = REDUCTION_NONE;
+        Term *next = term_reduce_once_kind(current, &changed, &kind,
+                                           eta_enabled);
         if (!changed) {
             term_free(next);
             break;
@@ -1628,11 +1656,11 @@ static int evaluate_and_print(Term *parsed, const Env *env,
         term_free(current);
         current = next;
 
-        int more = term_can_reduce(current);
+        int more = term_can_reduce(current, eta_enabled);
         if (more && step < max_steps) {
-            print_term_with_matches(STEP_PREFIX, current, env);
+            print_term_with_matches(reduction_prefix(kind), current, env);
         } else {
-            print_numbered_term(lines, "ᵦ", current, env,
+            print_numbered_term(lines, reduction_marker(kind), current, env,
                                 more ? "  (...)" : "");
             numbered_printed = 1;
         }
@@ -1656,7 +1684,8 @@ static int save_definition_from_input(Env *env, char *input, char *err, size_t e
                                       const LineResults *lines,
                                       Term **saved,
                                       int *reduced_first, int *stopped_early,
-                                      const char *source, int max_steps)
+                                      const char *source, int max_steps,
+                                      int eta_enabled)
 {
     char *arrow = strstr(input, "<-");
     char *eq = strchr(input, '=');
@@ -1694,7 +1723,7 @@ static int save_definition_from_input(Env *env, char *input, char *err, size_t e
     if (reduce_first) {
         int stopped = 0;
         Term *normal = reduce_expanded_normal_form(t, env, last_output,
-                                                   max_steps,
+                                                   max_steps, eta_enabled,
                                                    &stopped, err, errsz);
         term_free(t);
         if (!normal) return 0;
@@ -1709,7 +1738,7 @@ static int save_definition_from_input(Env *env, char *input, char *err, size_t e
         return 0;
     }
 
-    env_recompute_normals(env, last_output, max_steps);
+    env_recompute_normals(env, last_output, max_steps, eta_enabled);
 
     if (saved) {
         ssize_t idx = env_find(env, name);
@@ -1720,13 +1749,15 @@ static int save_definition_from_input(Env *env, char *input, char *err, size_t e
 }
 
 static int define_from_arg(Env *env, const char *arg, const Term *last_output,
-                           const LineResults *lines, int max_steps)
+                           const LineResults *lines, int max_steps,
+                           int eta_enabled)
 {
     char err[256];
     char *copy = xstrdup_main(arg);
 
     if (!save_definition_from_input(env, copy, err, sizeof err, last_output,
-                                    lines, NULL, NULL, NULL, NULL, max_steps)) {
+                                    lines, NULL, NULL, NULL, NULL, max_steps,
+                                    eta_enabled)) {
         fprintf(stderr, "Definition error: %s\n", err);
         free(copy);
         return 1;
@@ -1738,7 +1769,7 @@ static int define_from_arg(Env *env, const char *arg, const Term *last_output,
 
 static int load_definitions_from_file(Env *env, const char *path,
                                       const Term *last_output,
-                                      int max_steps,
+                                      int max_steps, int eta_enabled,
                                       size_t *imported,
                                       char *err, size_t errsz)
 {
@@ -1783,7 +1814,7 @@ static int load_definitions_from_file(Env *env, const char *path,
         if (!save_definition_from_input(env, input, def_err, sizeof def_err,
                                         last_output, NULL,
                                         NULL, NULL, NULL, path,
-                                        max_steps)) {
+                                        max_steps, eta_enabled)) {
             snprintf(err, errsz, "%s:%zu: %s", path, line_no, def_err);
             fclose(f);
             return 0;
@@ -1806,7 +1837,8 @@ static int evaluate_source_stdout(const char *source, Env *env,
                                   Term **last_output,
                                   LineResults *lines,
                                   StepSession *session,
-                                  int max_steps, Term **out_result)
+                                  int max_steps, int eta_enabled,
+                                  Term **out_result)
 {
     char err[256];
     char *copy = xstrdup_main(source);
@@ -1833,17 +1865,15 @@ static int evaluate_source_stdout(const char *source, Env *env,
         }
 
         Term *current = term_clone(session->current);
-        int steps = reduce_steps_from(&current, step_limit);
+        int steps = reduce_steps_and_print(&current, step_limit, lines, env,
+                                           eta_enabled);
         if (steps == 0) {
             fprintf(stderr, "Already in normal form.\n");
-        } else {
-            print_numbered_term(lines, "ᵦ", current, env,
-                                term_can_reduce(current) ? "  (...)" : "");
         }
         step_session_set(session, current);
         if (last_output) {
             replace_term(last_output, current);
-            env_recompute_normals(env, *last_output, max_steps);
+            env_recompute_normals(env, *last_output, max_steps, eta_enabled);
         }
         if (out_result) *out_result = term_clone(current);
         term_free(current);
@@ -1887,21 +1917,17 @@ static int evaluate_source_stdout(const char *source, Env *env,
     }
 
     if (shallow_changed && !term_alpha_equivalent(shallow, current)) {
-        print_term_with_matches(STEP_PREFIX, current, env);
+        print_term_with_matches(STEP_PREFIX_BETA, current, env);
     }
     term_free(shallow);
     term_free(parsed);
 
     if (step_limit) {
-        int steps = reduce_steps_from(&current, step_limit);
-        if (steps > 0) {
-            print_numbered_term(lines, "ᵦ", current, env,
-                                term_can_reduce(current) ? "  (...)" : "");
-        }
+        reduce_steps_and_print(&current, step_limit, lines, env, eta_enabled);
         if (session) step_session_set(session, current);
         if (last_output) {
             replace_term(last_output, current);
-            env_recompute_normals(env, *last_output, max_steps);
+            env_recompute_normals(env, *last_output, max_steps, eta_enabled);
         }
         if (out_result) *out_result = term_clone(current);
         term_free(current);
@@ -1914,7 +1940,9 @@ static int evaluate_source_stdout(const char *source, Env *env,
     int numbered_printed = 0;
     for (int step = 1; step <= max_steps; step++) {
         int changed = 0;
-        Term *next = term_reduce_once(current, &changed);
+        ReductionKind kind = REDUCTION_NONE;
+        Term *next = term_reduce_once_kind(current, &changed, &kind,
+                                           eta_enabled);
         if (!changed) {
             term_free(next);
             break;
@@ -1923,11 +1951,11 @@ static int evaluate_source_stdout(const char *source, Env *env,
         term_free(current);
         current = next;
 
-        int more = term_can_reduce(current);
+        int more = term_can_reduce(current, eta_enabled);
         if (more && step < max_steps) {
-            print_term_with_matches(STEP_PREFIX, current, env);
+            print_term_with_matches(reduction_prefix(kind), current, env);
         } else {
-            print_numbered_term(lines, "ᵦ", current, env,
+            print_numbered_term(lines, reduction_marker(kind), current, env,
                                 more ? "  (...)" : "");
             numbered_printed = 1;
         }
@@ -1943,7 +1971,7 @@ static int evaluate_source_stdout(const char *source, Env *env,
     }
     if (last_output) {
         replace_term(last_output, current);
-        env_recompute_normals(env, *last_output, max_steps);
+        env_recompute_normals(env, *last_output, max_steps, eta_enabled);
     }
     if (out_result) *out_result = term_clone(current);
     term_free(current);
@@ -1972,7 +2000,7 @@ static void print_usage(FILE *out, const char *prog)
     fprintf(out, "  -h, --help              show this help\n");
     fprintf(out, "  -V, --version           show version information\n");
     fprintf(out, "\n");
-    fprintf(out, "Interactive commands include :def NAME, :defs, :free NAME, :load FILE, :max-steps [N], :version, :clear, :help, and :q.\n");
+    fprintf(out, "Interactive commands include :def NAME, :defs, :free NAME, :load FILE, :eta [on|off], :max-steps [N], :version, :clear, :help, and :q.\n");
 }
 
 static int missing_arg(const char *option)
@@ -1987,7 +2015,7 @@ static int run_batch(int argc, char **argv, Env *env)
     Term *last_output = NULL;
     LineResults lines = {0};
     StepSession session = {0};
-    Settings settings = { DEFAULT_MAX_STEPS };
+    Settings settings = { DEFAULT_MAX_STEPS, 0 };
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -1997,7 +2025,9 @@ static int run_batch(int argc, char **argv, Env *env)
                 Term *result = NULL;
                 int rc = evaluate_source_stdout(argv[i], env, &last_output,
                                                 &lines, &session,
-                                                settings.max_steps, &result);
+                                                settings.max_steps,
+                                                settings.eta_enabled,
+                                                &result);
                 status |= rc;
                 term_free(result);
             }
@@ -2031,13 +2061,15 @@ static int run_batch(int argc, char **argv, Env *env)
                 return missing_arg(arg);
             }
             status |= define_from_arg(env, argv[i], last_output, &lines,
-                                      settings.max_steps);
+                                      settings.max_steps,
+                                      settings.eta_enabled);
             continue;
         }
 
         if (strncmp(arg, "--define=", 9) == 0) {
             status |= define_from_arg(env, arg + 9, last_output, &lines,
-                                      settings.max_steps);
+                                      settings.max_steps,
+                                      settings.eta_enabled);
             continue;
         }
 
@@ -2052,6 +2084,7 @@ static int run_batch(int argc, char **argv, Env *env)
             size_t imported = 0;
             if (!load_definitions_from_file(env, argv[i], last_output,
                                             settings.max_steps,
+                                            settings.eta_enabled,
                                             &imported, err, sizeof err)) {
                 fprintf(stderr, "Load error: %s\n", err);
                 status |= 1;
@@ -2064,6 +2097,7 @@ static int run_batch(int argc, char **argv, Env *env)
             size_t imported = 0;
             if (!load_definitions_from_file(env, arg + 7, last_output,
                                             settings.max_steps,
+                                            settings.eta_enabled,
                                             &imported, err, sizeof err)) {
                 fprintf(stderr, "Load error: %s\n", err);
                 status |= 1;
@@ -2082,7 +2116,8 @@ static int run_batch(int argc, char **argv, Env *env)
                 fprintf(stderr, "No definition named %s\n", argv[i]);
                 status |= 1;
             } else {
-                env_recompute_normals(env, last_output, settings.max_steps);
+                env_recompute_normals(env, last_output, settings.max_steps,
+                                      settings.eta_enabled);
             }
             continue;
         }
@@ -2092,7 +2127,8 @@ static int run_batch(int argc, char **argv, Env *env)
                 fprintf(stderr, "No definition named %s\n", arg + 7);
                 status |= 1;
             } else {
-                env_recompute_normals(env, last_output, settings.max_steps);
+                env_recompute_normals(env, last_output, settings.max_steps,
+                                      settings.eta_enabled);
             }
             continue;
         }
@@ -2113,7 +2149,8 @@ static int run_batch(int argc, char **argv, Env *env)
                 line_results_free(&lines);
                 return 2;
             }
-            env_recompute_normals(env, last_output, settings.max_steps);
+            env_recompute_normals(env, last_output, settings.max_steps,
+                                  settings.eta_enabled);
             continue;
         }
 
@@ -2127,7 +2164,8 @@ static int run_batch(int argc, char **argv, Env *env)
                 line_results_free(&lines);
                 return 2;
             }
-            env_recompute_normals(env, last_output, settings.max_steps);
+            env_recompute_normals(env, last_output, settings.max_steps,
+                                  settings.eta_enabled);
             continue;
         }
 
@@ -2141,7 +2179,9 @@ static int run_batch(int argc, char **argv, Env *env)
             Term *result = NULL;
             int rc = evaluate_source_stdout(argv[i], env, &last_output,
                                             &lines, &session,
-                                            settings.max_steps, &result);
+                                            settings.max_steps,
+                                            settings.eta_enabled,
+                                            &result);
             status |= rc;
             term_free(result);
             continue;
@@ -2159,7 +2199,9 @@ static int run_batch(int argc, char **argv, Env *env)
         Term *result = NULL;
         int rc = evaluate_source_stdout(arg, env, &last_output,
                                         &lines, &session,
-                                        settings.max_steps, &result);
+                                        settings.max_steps,
+                                        settings.eta_enabled,
+                                        &result);
         status |= rc;
         term_free(result);
     }
@@ -2197,7 +2239,7 @@ static int run_interactive(Env *env)
     Term *last_output = NULL;
     LineResults lines = {0};
     StepSession session = {0};
-    Settings settings = { DEFAULT_MAX_STEPS };
+    Settings settings = { DEFAULT_MAX_STEPS, 0 };
 
     while (1) {
         if (!read_lambda_line("λ> ", line, sizeof line, &history)) break;
@@ -2208,16 +2250,15 @@ static int run_interactive(Env *env)
             if (!session.current) continue;
 
             Term *current = term_clone(session.current);
-            int steps = reduce_steps_from(&current, 1);
+            int steps = reduce_steps_and_print(&current, 1, &lines, env,
+                                               settings.eta_enabled);
             if (steps == 0) {
                 output_printf("Already in normal form.\n");
-            } else {
-                print_numbered_term(&lines, "ᵦ", current, env,
-                                    term_can_reduce(current) ? "  (...)" : "");
             }
             step_session_set(&session, current);
             replace_term(&last_output, current);
-            env_recompute_normals(env, last_output, settings.max_steps);
+            env_recompute_normals(env, last_output, settings.max_steps,
+                                  settings.eta_enabled);
             term_free(current);
             continue;
         }
@@ -2264,8 +2305,30 @@ static int run_interactive(Env *env)
             }
 
             settings.max_steps = max_steps;
-            env_recompute_normals(env, last_output, settings.max_steps);
+            env_recompute_normals(env, last_output, settings.max_steps,
+                                  settings.eta_enabled);
             output_printf("max-steps = %d\n", settings.max_steps);
+            continue;
+        }
+
+        if (strncmp(input, ":eta", 4) == 0 &&
+            (input[4] == '\0' || isspace((unsigned char)input[4]))) {
+            char *arg = trim_in_place(input + 4);
+
+            if (*arg == '\0') {
+                settings.eta_enabled = !settings.eta_enabled;
+            } else if (strcmp(arg, "on") == 0) {
+                settings.eta_enabled = 1;
+            } else if (strcmp(arg, "off") == 0) {
+                settings.eta_enabled = 0;
+            } else {
+                output_printf("Usage: :eta [on|off]\n");
+                continue;
+            }
+
+            env_recompute_normals(env, last_output, settings.max_steps,
+                                  settings.eta_enabled);
+            output_printf("eta = %s\n", settings.eta_enabled ? "on" : "off");
             continue;
         }
 
@@ -2307,6 +2370,7 @@ static int run_interactive(Env *env)
             size_t imported = 0;
             if (!load_definitions_from_file(env, path, last_output,
                                             settings.max_steps,
+                                            settings.eta_enabled,
                                             &imported, err, sizeof err)) {
                 output_printf("Load error: %s\n", err);
                 continue;
@@ -2334,7 +2398,8 @@ static int run_interactive(Env *env)
 
             if (env_remove(env, name)) {
                 output_printf("Freed %s.\n", name);
-                env_recompute_normals(env, last_output, settings.max_steps);
+                env_recompute_normals(env, last_output, settings.max_steps,
+                                      settings.eta_enabled);
             } else {
                 output_printf("No definition named %s.\n", name);
             }
@@ -2350,7 +2415,8 @@ static int run_interactive(Env *env)
             if (!save_definition_from_input(env, input, err, sizeof err,
                                             last_output, &lines, &saved,
                                             &reduced_first, &stopped_early,
-                                            NULL, settings.max_steps)) {
+                                            NULL, settings.max_steps,
+                                            settings.eta_enabled)) {
                 output_printf("Definition error: %s\n", err);
                 continue;
             }
@@ -2380,16 +2446,15 @@ static int run_interactive(Env *env)
             }
 
             Term *current = term_clone(session.current);
-            int steps = reduce_steps_from(&current, step_limit);
+            int steps = reduce_steps_and_print(&current, step_limit, &lines,
+                                               env, settings.eta_enabled);
             if (steps == 0) {
                 output_printf("Already in normal form.\n");
-            } else {
-                print_numbered_term(&lines, "ᵦ", current, env,
-                                    term_can_reduce(current) ? "  (...)" : "");
             }
             step_session_set(&session, current);
             replace_term(&last_output, current);
-            env_recompute_normals(env, last_output, settings.max_steps);
+            env_recompute_normals(env, last_output, settings.max_steps,
+                                  settings.eta_enabled);
             term_free(current);
             continue;
         }
@@ -2402,14 +2467,16 @@ static int run_interactive(Env *env)
 
         Term *new_last = NULL;
         if (evaluate_and_print(parsed, env, last_output, &lines,
-                               settings.max_steps, step_limit, &new_last)) {
+                               settings.max_steps, step_limit,
+                               settings.eta_enabled, &new_last)) {
             if (step_limit) {
                 step_session_set(&session, new_last);
             } else {
                 step_session_clear(&session);
             }
             replace_term(&last_output, new_last);
-            env_recompute_normals(env, last_output, settings.max_steps);
+            env_recompute_normals(env, last_output, settings.max_steps,
+                                  settings.eta_enabled);
         }
         term_free(new_last);
         term_free(parsed);

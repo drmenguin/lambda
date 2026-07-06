@@ -2,7 +2,7 @@
 .\" Copyright (C) 2026 Luke Collins
 .\" SPDX-License-Identifier: GPL-3.0-or-later
 .SH NAME
-lambda \- lambda calculus beta-reduction playground
+lambda \- lambda calculus beta reduction playground with optional eta
 .SH SYNOPSIS
 .B lambda
 .RI [ OPTION ...]
@@ -13,7 +13,7 @@ starts an interactive ncurses lambda calculus reducer when no expression is
 given. With one or more expressions, it reduces each expression on standard
 output and exits.
 .PP
-Expressions use normal-order beta reduction. Final result lines are numbered
+Expressions use normal-order beta reduction by default. Final result lines are numbered
 as
 .BR [N]> .
 Backslash and the UTF-8 lambda character both introduce abstractions.
@@ -25,7 +25,14 @@ performs gradual reduction by one or
 .I N
 steps; a displayed
 .B (...)
-means more beta steps remain.
+means more reduction steps remain.
+In interactive mode,
+.B :eta on
+enables eta reduction,
+.B :eta off
+disables it, and
+.B :eta
+toggles it. Eta steps are marked with \[u03B7].
 .PP
 When a displayed term is alpha-equivalent to one or more saved definitions,
 .B lambda
@@ -115,6 +122,11 @@ argument,
 .B :max-steps
 shows the current limit. The default is 300 steps.
 .TP
+.BI :eta\  on|off
+Enable or disable eta reduction. A bare
+.B :eta
+toggles eta reduction. Eta reduction is off by default.
+.TP
 .B :clear
 Clear the terminal and scrollback.
 .TP
@@ -170,14 +182,14 @@ Result from numbered output line
 .B TERM /
 Reduce
 .I TERM
-by one beta step and stop.
+by one reduction step and stop.
 .TP
 .BI TERM\ / N
-Reduce
+Show
 .I TERM
-by
+for
 .I N
-beta steps and stop.
+reduction steps, then stop.
 .TP
 .BI / N
 Continue the previous gradual reduction by

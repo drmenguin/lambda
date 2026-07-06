@@ -2,7 +2,7 @@
 pkgname=lambda
 pkgver=0.1.14
 pkgrel=1
-pkgdesc='Lambda calculus beta-reduction playground with ncurses and CLI front ends'
+pkgdesc='Lambda calculus beta reduction playground with optional eta and ncurses/CLI front ends'
 arch=('x86_64')
 url='https://github.com/drmenguin/lambda'
 license=('GPL-3.0-or-later')

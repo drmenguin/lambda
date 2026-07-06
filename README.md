@@ -3,14 +3,17 @@
 [![License: GPL v3.0](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
 [![AUR](https://img.shields.io/aur/version/lambda?label=AUR)](https://aur.archlinux.org/packages/lambda)
 
-`lambda` is a small lambda calculus beta-reduction playground for the terminal.
+`lambda` is a small lambda calculus beta reduction playground for the terminal,
+with optional eta reduction in the interactive interface.
 It includes an interactive ncurses interface and a plain command-line reducer.
 
 ![Demo of lambda reducing terms in the terminal](images/demo.gif)
 
 ## What It Does
 Lambda expressions are parsed, printed with Unicode lambda notation, and reduced
-using normal-order beta reduction. Reduction steps are marked with `→ᵦ`.
+using normal-order beta reduction by default. Beta steps are marked with `→ᵦ`.
+In the interactive interface, `:eta on` enables eta reduction, `:eta off`
+disables it, and `:eta` toggles it. Eta steps are marked with `→η`.
 
 Examples:
 
@@ -30,6 +33,7 @@ One <- Succ Zero
 :def I
 :defs
 :free I
+:eta on
 ```
 
 Use `=` to save a definition lazily. Use `<-` to reduce the expression first
@@ -49,6 +53,8 @@ Use `:def NAME` to show one saved definition without expanding it; eager
 definitions also show the original expression they were reduced from.
 Use `:max-steps` to show the current reduction step limit, or
 `:max-steps N` to set it for later reductions. The default is 300 steps.
+Use `:eta on`, `:eta off`, or `:eta` to control eta reduction. Eta reduction is
+off by default.
 In the ncurses interface, result output lines are numbered as `[1]>`, `[2]>`,
 and so on. `%` refers to the previous numbered output result, while `%2` or
 `%10` refers to that numbered output line. Use PageUp/PageDown or the mouse
@@ -83,9 +89,9 @@ x1 x2       subscript-style variables, displayed as x₁ x₂
 KI, Ki      uppercase-starting names stay as one identifier
 %           previous numbered output result
 %2          result from numbered output line 2
-term /      reduce term by one beta step; (...) means more steps remain
-term /2     reduce term by two beta steps and stop
-/2          continue the previous gradual reduction by two steps
+term /      reduce term by one step; (...) means more steps remain
+term /2     show two reduction steps and stop
+/2          show two more steps from the previous gradual reduction
 Enter       continue the previous gradual reduction by one step
 ```
 

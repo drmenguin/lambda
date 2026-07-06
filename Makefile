@@ -59,15 +59,20 @@ check: all
 		rm -f "$$tmpfile"
 	./lambda '(\x.x) y' '%' | grep -F '  y'
 	./lambda '(\x.x) y' '%1' | grep -F '  y'
+	./lambda '(\x.xx)(\x.xy)z /2' | grep -F ' →ᵦ (λx.x y) (λx.x y) z'
 	./lambda '(\x.xx)(\x.xy)z /' '/2' | grep -F '[2]>ᵦ y y z'
 	./lambda '\%.%' 2>&1 | grep -F "reserved for history references"
 	./lambda '(\x.x) y' --define 'Saved=%' Saved | grep -F '  y    [Saved]'
 	./lambda '(\x.x) y' --define 'Saved=%1' Saved | grep -F '  y    [Saved]'
 	./lambda '(\x.x) y' --define 'Saved<-%' Saved | grep -F '  y    [Saved]'
 	./lambda --load std 'I y' | grep -F '[1]>ᵦ y'
+	./lambda --eval '\x.f x' | grep -F '[1]> λx.f x'
+	./lambda --help | grep -F ':eta [on|off]'
 	./lambda --max-steps 1 '(\x.x x) (\x.x x)' | grep -F 'Stopped after 1 steps'
 	./lambda-cli --eval '(\x.x) y' | grep -F '[1]>ᵦ y'
+	./lambda-cli --eval '\x.f x' | grep -F '[1]> λx.f x'
 	./lambda-cli '(\x.x) y' '%1' | grep -F '[2]> y'
+	./lambda-cli '(\x.xx)(\x.xy)z /2' | grep -F ' →ᵦ (λx.x y) (λx.x y) z'
 	./lambda-cli '(\x.xx)(\x.xy)z /' '/2' | grep -F '[2]>ᵦ y y z'
 	printf '%s\n' '(\x.xx)(\x.xy)z /' '' '' '' | ./lambda-cli | grep -F 'Already in normal form.'
 	./lambda-cli '\%.%' 2>&1 | grep -F "reserved for history references"
@@ -92,7 +97,7 @@ deb: all
 		'Maintainer: Luke Collins <luke@collins.mt>' \
 		'Depends: libc6, libncursesw6' \
 		'Homepage: https://github.com/drmenguin/lambda' \
-		'Description: Lambda calculus beta-reduction playground' \
+		'Description: Lambda calculus beta reduction playground with optional eta' \
 		' lambda includes an interactive ncurses interface and a plain command-line reducer.' \
 		> "$(DEBROOT)/DEBIAN/control"
 	dpkg-deb --build --root-owner-group "$(DEBROOT)" "$(DISTDIR)/lambda_$(VERSION)_$(DEBARCH).deb"

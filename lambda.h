@@ -1,5 +1,5 @@
 /*
- * lambda - lambda calculus beta-reduction playground
+ * lambda - lambda calculus beta reduction playground with optional eta
  *
  * Copyright (C) 2026 Luke Collins
  * Website: https://lc.mt
@@ -76,7 +76,13 @@ void term_free(Term *t);
 */
 Term *parse_lambda(const char *source, char *errbuf, size_t errbuf_sz);
 
-/* Beta reduction ---------------------------------------------------------- */
+/* Reduction --------------------------------------------------------------- */
+
+typedef enum {
+    REDUCTION_NONE,
+    REDUCTION_BETA,
+    REDUCTION_ETA
+} ReductionKind;
 
 int term_free_in(const char *name, const Term *t);
 
@@ -94,11 +100,25 @@ int term_alpha_equivalent(const Term *a, const Term *b);
 Term *term_reduce_once(const Term *t, int *changed);
 
 /*
+   Like term_reduce_once, but writes the rule used for the step to *kind.
+   If eta_enabled is nonzero, eta redexes may be reduced too. If no step is
+   possible, *kind is REDUCTION_NONE.
+*/
+Term *term_reduce_once_kind(const Term *t, int *changed, ReductionKind *kind,
+                            int eta_enabled);
+
+/*
    Reduces by normal order until no more redexes are found, or max_steps is hit.
    If max_steps <= 0, a sensible default is used.
 */
 Term *term_reduce_normal_order(const Term *t, int max_steps,
                                int *steps, int *stopped_early);
+/*
+   Like term_reduce_normal_order, with optional eta reduction.
+*/
+Term *term_reduce_normal_order_with_eta(const Term *t, int max_steps,
+                                        int *steps, int *stopped_early,
+                                        int eta_enabled);
 
 /* Printing ---------------------------------------------------------------- */
 
