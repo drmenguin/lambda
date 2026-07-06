@@ -34,7 +34,7 @@ One <- Succ Zero
 
 Use `=` to save a definition lazily. Use `<-` to reduce the expression first
 and save the result. In the interactive interface and in multi-expression
-`lambda` invocations, `%` refers to the previous reduction result.
+`lambda` invocations, `%` refers to the previous numbered output result.
 Use `:load FILE` or `lambda --load FILE` to import definitions from a file.
 Use `:load std` or `lambda --load std` to load the standard definitions in
 [`std.lc`](std.lc).
@@ -49,10 +49,11 @@ Use `:def NAME` to show one saved definition without expanding it; eager
 definitions also show the original expression they were reduced from.
 Use `:max-steps` to show the current reduction step limit, or
 `:max-steps N` to set it for later reductions. The default is 300 steps.
-In the ncurses interface, prompts are numbered. `%` refers to the previous
-reduction result, while `%2` or `%10` refers to the result from that numbered
-line. Use PageUp/PageDown or the mouse wheel to scroll through previous output.
-`:clear` clears both the terminal and the internal scrollback.
+In the ncurses interface, result output lines are numbered as `[1]>`, `[2]>`,
+and so on. `%` refers to the previous numbered output result, while `%2` or
+`%10` refers to that numbered output line. Use PageUp/PageDown or the mouse
+wheel to scroll through previous output. `:clear` clears both the terminal and
+the internal scrollback.
 
 When a displayed term is alpha-equivalent to saved definitions, `lambda` shows
 the matching names beside it. A `*` means the saved definition reduces to the
@@ -80,11 +81,12 @@ f \x.x      bare lambda arguments are accepted, meaning f (λx.x)
 xx          lowercase letters split into variables: x x
 x1 x2       subscript-style variables, displayed as x₁ x₂
 KI, Ki      uppercase-starting names stay as one identifier
-%           previous reduction result in lambda
-%2          reduction result from line 2
-term /      reduce term by one beta step
-term /2     reduce term by two beta steps
+%           previous numbered output result
+%2          result from numbered output line 2
+term /      reduce term by one beta step; (...) means more steps remain
+term /2     reduce term by two beta steps and stop
 /2          continue the previous gradual reduction by two steps
+Enter       continue the previous gradual reduction by one step
 ```
 
 Both backslash and the UTF-8 lambda character are accepted as lambdas. History

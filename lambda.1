@@ -13,16 +13,19 @@ starts an interactive ncurses lambda calculus reducer when no expression is
 given. With one or more expressions, it reduces each expression on standard
 output and exits.
 .PP
-Expressions use normal-order beta reduction. Reduction steps are marked with
-.BR →ᵦ .
+Expressions use normal-order beta reduction. Final result lines are numbered
+as
+.BR [N]> .
 Backslash and the UTF-8 lambda character both introduce abstractions.
-In the interactive interface, prompts are numbered. A trailing
+In the interactive interface, a trailing
 .B /
 or
 .BI / N
 performs gradual reduction by one or
 .I N
-steps.
+steps; a displayed
+.B (...)
+means more beta steps remain.
 .PP
 When a displayed term is alpha-equivalent to one or more saved definitions,
 .B lambda
@@ -157,11 +160,11 @@ Uppercase-starting names remain single identifiers and are useful for saved
 definitions.
 .TP
 .B %
-Previous reduction result.
+Previous numbered output result.
 History references are reserved and cannot be lambda parameters.
 .TP
 .BI % N
-Reduction result from numbered line
+Result from numbered output line
 .IR N .
 .TP
 .B TERM /
@@ -181,7 +184,7 @@ Continue the previous gradual reduction by
 .I N
 steps. A bare
 .B /
-continues by one step.
+or empty input continues by one step.
 .SH STANDARD LIBRARY
 Load the standard library with
 .B :load std

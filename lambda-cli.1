@@ -12,13 +12,14 @@ lambda-cli \- plain command-line lambda calculus beta reducer
 reduces lambda calculus expressions from command-line arguments. If no
 expression is supplied, it reads expressions line by line from standard input.
 .PP
-Expressions use normal-order beta reduction. Reduction steps are marked with
-.BR →ᵦ .
+Expressions use normal-order beta reduction. Final result lines are numbered
+as
+.BR [N]> .
 Across expressions in one invocation or standard-input session,
 .B %
-refers to the previous result and
+refers to the previous numbered output result and
 .BI % N
-refers to numbered line
+refers to numbered output line
 .IR N .
 A trailing
 .B /
@@ -26,7 +27,9 @@ or
 .BI / N
 performs gradual reduction by one or
 .I N
-steps.
+steps; a displayed
+.B (...)
+means more beta steps remain.
 .PP
 This command is the minimal non-ncurses front end. Use
 .BR lambda (1)
@@ -68,11 +71,11 @@ Lowercase letters split into variables, so this means
 Subscript-style variables.
 .TP
 .B %
-Previous reduction result.
+Previous numbered output result.
 History references are reserved and cannot be lambda parameters.
 .TP
 .BI % N
-Reduction result from numbered line
+Result from numbered output line
 .IR N .
 .TP
 .B TERM /
@@ -92,7 +95,7 @@ Continue the previous gradual reduction by
 .I N
 steps. A bare
 .B /
-continues by one step.
+or empty input continues by one step.
 .SH EXAMPLES
 .TP
 .B lambda-cli '(\ex.x) y'

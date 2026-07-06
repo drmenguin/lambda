@@ -45,11 +45,11 @@ install: all
 check: all
 	./lambda --version
 	./lambda-cli --version
-	./lambda --define 'I=\x.x' --eval 'I y' | grep -F '→ᵦ y'
-	./lambda-cli --eval '(\x.x) \y.y' | grep -F '→ᵦ λy.y'
+	./lambda --define 'I=\x.x' --eval 'I y' | grep -F '[1]>ᵦ y'
+	./lambda-cli --eval '(\x.x) \y.y' | grep -F '[1]>ᵦ λy.y'
 	./lambda -d 'One=Succ Zero' One | grep -F '  Succ Zero    [One]'
 	./lambda --define 'I=\x.x' --free I --eval 'I y' | grep -F 'I y'
-	./lambda --eval '(\x y.x y) y' | grep -F 'λz.y z'
+	./lambda --eval '(\x y.x y) y' | grep -F '[1]>ᵦ λz.y z'
 	./lambda --define 'I=\x.x' --define 'J=\y.y' --eval '\z.z' | grep -F 'λz.z    [I, J]'
 	./lambda -d 'Zero=\f x.x' -d 'Succ=\n f x.f (n f x)' -d 'One=Succ Zero' '\f x.f x' | grep -F 'λf x.f x    [One*]'
 	./lambda -d 'Zero=\f x.x' -d 'Succ=\n f x.f (n f x)' -d 'One<-Succ Zero' '\f x.f x' | grep -F 'λf x.f x    [One]'
@@ -59,16 +59,17 @@ check: all
 		rm -f "$$tmpfile"
 	./lambda '(\x.x) y' '%' | grep -F '  y'
 	./lambda '(\x.x) y' '%1' | grep -F '  y'
-	./lambda '(\x.xx)(\x.xy)z /' '/2' | grep -F '→ᵦ y y z'
+	./lambda '(\x.xx)(\x.xy)z /' '/2' | grep -F '[2]>ᵦ y y z'
 	./lambda '\%.%' 2>&1 | grep -F "reserved for history references"
 	./lambda '(\x.x) y' --define 'Saved=%' Saved | grep -F '  y    [Saved]'
 	./lambda '(\x.x) y' --define 'Saved=%1' Saved | grep -F '  y    [Saved]'
 	./lambda '(\x.x) y' --define 'Saved<-%' Saved | grep -F '  y    [Saved]'
-	./lambda --load std 'I y' | grep -F '→ᵦ y'
+	./lambda --load std 'I y' | grep -F '[1]>ᵦ y'
 	./lambda --max-steps 1 '(\x.x x) (\x.x x)' | grep -F 'Stopped after 1 steps'
-	./lambda-cli --eval '(\x.x) y' | grep -F '→ᵦ y'
-	./lambda-cli '(\x.x) y' '%1' | grep -F '  y'
-	./lambda-cli '(\x.xx)(\x.xy)z /' '/2' | grep -F '→ᵦ y y z'
+	./lambda-cli --eval '(\x.x) y' | grep -F '[1]>ᵦ y'
+	./lambda-cli '(\x.x) y' '%1' | grep -F '[2]> y'
+	./lambda-cli '(\x.xx)(\x.xy)z /' '/2' | grep -F '[2]>ᵦ y y z'
+	printf '%s\n' '(\x.xx)(\x.xy)z /' '' '' '' | ./lambda-cli | grep -F 'Already in normal form.'
 	./lambda-cli '\%.%' 2>&1 | grep -F "reserved for history references"
 	./lambda-cli --max-steps 1 '(\x.x x) (\x.x x)' | grep -F 'Stopped after 1 steps'
 	groff -man -Tutf8 lambda.1 >/dev/null

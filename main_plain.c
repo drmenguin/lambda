@@ -21,7 +21,7 @@
 #define DEFAULT_MAX_STEPS LAMBDA_DEFAULT_MAX_STEPS
 #define LINE_CAP 4096
 #define VERSION "0.1.13"
-#define STEP_PREFIX "→ᵦ "
+#define STEP_PREFIX " →ᵦ "
 
 typedef struct {
     Term **items;
@@ -102,7 +102,7 @@ static Term *line_results_get(const LineResults *lines, size_t line_no)
     return lines->items[line_no - 1];
 }
 
-static void line_results_add(LineResults *lines, const Term *term)
+static size_t line_results_add(LineResults *lines, const Term *term)
 {
     if (lines->count == lines->cap) {
         size_t new_cap = lines->cap ? lines->cap * 2 : 64;
@@ -116,6 +116,7 @@ static void line_results_add(LineResults *lines, const Term *term)
     }
 
     lines->items[lines->count++] = term ? term_clone(term) : NULL;
+    return lines->count;
 }
 
 static void line_results_free(LineResults *lines)
@@ -256,6 +257,23 @@ static void print_term(const char *prefix, const Term *term)
     free(s);
 }
 
+static int term_can_reduce(const Term *term)
+{
+    int changed = 0;
+    Term *next = term_reduce_once(term, &changed);
+    term_free(next);
+    return changed;
+}
+
+static void print_numbered_term(LineResults *lines, const char *marker,
+                                const Term *term, const char *suffix)
+{
+    size_t line_no = line_results_add(lines, term);
+    char *s = term_to_string(term, 1);
+    printf("[%zu]>%s %s%s\n", line_no, marker, s, suffix ? suffix : "");
+    free(s);
+}
+
 static int reduce_steps_from(Term **current, int step_limit)
 {
     int steps_taken = 0;
@@ -265,21 +283,19 @@ static int reduce_steps_from(Term **current, int step_limit)
         Term *next = term_reduce_once(*current, &changed);
         if (!changed) {
             term_free(next);
-            printf("Already in normal form.\n");
             break;
         }
 
         term_free(*current);
         *current = next;
         steps_taken++;
-        print_term(STEP_PREFIX, *current);
     }
 
     return steps_taken;
 }
 
 static int reduce_and_print(char *source, int max_steps,
-                            const LineResults *lines, Term **last_output,
+                            LineResults *lines, Term **last_output,
                             StepSession *session, Term **out_result)
 {
     char err[256];
@@ -291,14 +307,23 @@ static int reduce_and_print(char *source, int max_steps,
     }
 
     if (source[0] == '\0') {
-        if (!step_limit) return 0;
+        if (!step_limit) {
+            if (!session->current) return 0;
+            step_limit = 1;
+        }
         if (!session->current) {
             fprintf(stderr, "No gradual reduction to continue.\n");
             return 1;
         }
 
         Term *current = term_clone(session->current);
-        reduce_steps_from(&current, step_limit);
+        int steps = reduce_steps_from(&current, step_limit);
+        if (steps == 0) {
+            printf("Already in normal form.\n");
+        } else {
+            print_numbered_term(lines, "ᵦ", current,
+                                term_can_reduce(current) ? "  (...)" : "");
+        }
         step_session_set(session, current);
         replace_term(last_output, current);
         if (out_result) *out_result = term_clone(current);
@@ -321,10 +346,13 @@ static int reduce_and_print(char *source, int max_steps,
     }
 
     current = expanded;
-    print_term("  ", current);
 
     if (step_limit) {
-        reduce_steps_from(&current, step_limit);
+        int steps = reduce_steps_from(&current, step_limit);
+        if (steps > 0) {
+            print_numbered_term(lines, "ᵦ", current,
+                                term_can_reduce(current) ? "  (...)" : "");
+        }
         step_session_set(session, current);
         replace_term(last_output, current);
         if (out_result) *out_result = term_clone(current);
@@ -332,8 +360,13 @@ static int reduce_and_print(char *source, int max_steps,
         return 0;
     }
 
+    if (term_can_reduce(current)) {
+        print_term("  ", current);
+    }
+
     step_session_clear(session);
 
+    int numbered_printed = 0;
     for (int step = 1; step <= max_steps; step++) {
         int changed = 0;
         Term *next = term_reduce_once(current, &changed);
@@ -345,7 +378,14 @@ static int reduce_and_print(char *source, int max_steps,
         term_free(current);
         current = next;
 
-        print_term(STEP_PREFIX, current);
+        int more = term_can_reduce(current);
+        if (more && step < max_steps) {
+            print_term(STEP_PREFIX, current);
+        } else {
+            print_numbered_term(lines, "ᵦ", current,
+                                more ? "  (...)" : "");
+            numbered_printed = 1;
+        }
 
         if (step == max_steps) {
             printf("Stopped after %d steps; term may not have a normal form.\n",
@@ -353,6 +393,10 @@ static int reduce_and_print(char *source, int max_steps,
         }
     }
 
+    if (!numbered_printed) {
+        /* No beta step was printed, so the original term is already the result. */
+        print_numbered_term(lines, "", current, "");
+    }
     replace_term(last_output, current);
     if (out_result) *out_result = term_clone(current);
     term_free(current);
@@ -364,9 +408,9 @@ static void print_usage(FILE *out, const char *prog)
     fprintf(out, "Usage: %s [OPTION...] [EXPR...]\n", prog);
     fprintf(out, "\n");
     fprintf(out, "Reduce lambda calculus expressions from arguments or standard input.\n");
-    fprintf(out, "Reduction uses normal-order beta reduction; steps are shown with →ᵦ.\n");
-    fprintf(out, "Across expressions, %% refers to the previous result and %%N to line N.\n");
-    fprintf(out, "A trailing / or /N performs one or N reduction steps; /N alone continues.\n");
+    fprintf(out, "Reduction uses normal-order beta reduction; final results are numbered as [N]>.\n");
+    fprintf(out, "Numbered [N]> output lines can be referenced later as %%N.\n");
+    fprintf(out, "A trailing / or /N performs one or N reduction steps; /N or empty input continues.\n");
     fprintf(out, "\n");
     fprintf(out, "Options:\n");
     fprintf(out, "  -e, --eval EXPR    reduce EXPR\n");
@@ -396,7 +440,6 @@ int main(int argc, char **argv)
                     int rc = reduce_and_print(copy, max_steps, &lines,
                                               &last_output, &session, &result);
                     status |= rc;
-                    line_results_add(&lines, rc == 0 ? result : NULL);
                     term_free(result);
                     free(copy);
                 }
@@ -436,7 +479,6 @@ int main(int argc, char **argv)
                 int rc = reduce_and_print(copy, max_steps, &lines,
                                           &last_output, &session, &result);
                 status |= rc;
-                line_results_add(&lines, rc == 0 ? result : NULL);
                 term_free(result);
                 free(copy);
                 continue;
@@ -486,7 +528,6 @@ int main(int argc, char **argv)
             int rc = reduce_and_print(copy, max_steps, &lines,
                                       &last_output, &session, &result);
             status |= rc;
-            line_results_add(&lines, rc == 0 ? result : NULL);
             term_free(result);
             free(copy);
         }
@@ -503,9 +544,6 @@ int main(int argc, char **argv)
         int rc = reduce_and_print(line, max_steps, &lines,
                                   &last_output, &session, &result);
         status |= rc;
-        if (line[0] != '\0' || result) {
-            line_results_add(&lines, rc == 0 ? result : NULL);
-        }
         term_free(result);
     }
 

@@ -33,7 +33,7 @@
 #define MAX_DEFS 128
 #define DEFAULT_MAX_STEPS LAMBDA_DEFAULT_MAX_STEPS
 #define VERSION "0.1.13"
-#define STEP_PREFIX "→ᵦ "
+#define STEP_PREFIX " →ᵦ "
 #ifndef LAMBDA_DATADIR
 #define LAMBDA_DATADIR "/usr/share/lambda"
 #endif
@@ -448,7 +448,7 @@ static Term *line_results_get(const LineResults *lines, size_t line_no)
     return lines->items[line_no - 1];
 }
 
-static void line_results_add(LineResults *lines, const Term *term)
+static size_t line_results_add(LineResults *lines, const Term *term)
 {
     if (lines->count == lines->cap) {
         size_t new_cap = lines->cap ? lines->cap * 2 : 64;
@@ -463,13 +463,7 @@ static void line_results_add(LineResults *lines, const Term *term)
     }
 
     lines->items[lines->count++] = term ? term_clone(term) : NULL;
-}
-
-static void line_results_set(LineResults *lines, size_t line_no, const Term *term)
-{
-    if (line_no == 0 || line_no > lines->count) return;
-    term_free(lines->items[line_no - 1]);
-    lines->items[line_no - 1] = term ? term_clone(term) : NULL;
+    return lines->count;
 }
 
 static void line_results_free(LineResults *lines)
@@ -1310,7 +1304,7 @@ static int read_lambda_line(const char *prompt, char *buf, size_t cap,
 
 static void print_help(void)
 {
-    output_printf("Reduction uses normal-order beta reduction; steps are shown with →ᵦ\n\n");
+    output_printf("Reduction uses normal-order beta reduction; final results are numbered as [N]>\n\n");
     output_printf("Commands:\n");
     output_printf("  :q             quit\n");
     output_printf("  :clear         clear the terminal and scrollback\n");
@@ -1341,12 +1335,12 @@ static void print_help(void)
     output_printf("  (\\x.x) y       beta-reduces to y\n");
     output_printf("  M = \\x.x       save a named definition\n");
     output_printf("  M <- (\\x.x) y  reduce first, then save the result as M\n");
-    output_printf("  %%              previous reduction result\n");
-    output_printf("  %%2             reduction result from line 2\n");
+    output_printf("  %%              previous numbered output result\n");
+    output_printf("  %%2             result from numbered output line 2\n");
     output_printf("  %% refs          reserved; not valid lambda parameters\n");
-    output_printf("  term /          reduce term by one beta step\n");
-    output_printf("  term /2         reduce term by two beta steps\n");
-    output_printf("  /2              continue the previous gradual reduction by two steps\n");
+    output_printf("  term /          reduce term by one beta step; (...) means more steps remain\n");
+    output_printf("  term /2         reduce term by two beta steps and stop\n");
+    output_printf("  /2 or Enter     continue the previous gradual reduction\n");
     output_printf("  M y            use a named definition\n");
     output_printf("  :def M         show how M is defined\n");
     output_printf("  :free M        remove a saved definition\n");
@@ -1499,28 +1493,30 @@ static char *alpha_matches_to_string(const Term *term, const Env *env)
     return s;
 }
 
-static void print_term_with_matches(const char *prefix, const Term *term, const Env *env)
+static void print_term_with_matches_suffix(const char *prefix, const Term *term,
+                                           const Env *env, const char *suffix)
 {
     char *s = term_to_string(term, 1);
     char *matches = alpha_matches_to_string(term, env);
+    const char *tail = suffix ? suffix : "";
 
     if (curses_started) {
         int width = getmaxx(stdscr);
 
         if (matches[0] == '\0') {
-            output_printf("%s%s\n", prefix, s);
+            output_printf("%s%s%s\n", prefix, s, tail);
         } else {
-            int base_width = utf8_width(prefix) + utf8_width(s);
+            int base_width = utf8_width(prefix) + utf8_width(s) + utf8_width(tail);
             int match_width = utf8_width(matches);
             if (base_width + 1 + match_width < width) {
                 int padding = width - base_width - match_width;
-                output_printf("%s%s%*s%s\n", prefix, s, padding, "", matches);
+                output_printf("%s%s%s%*s%s\n", prefix, s, tail, padding, "", matches);
             } else {
-                output_printf("%s%s %s\n", prefix, s, matches);
+                output_printf("%s%s%s %s\n", prefix, s, tail, matches);
             }
         }
     } else {
-        printf("%s%s", prefix, s);
+        printf("%s%s%s", prefix, s, tail);
         if (matches[0] != '\0') {
             printf("    %s", matches);
         }
@@ -1531,7 +1527,30 @@ static void print_term_with_matches(const char *prefix, const Term *term, const 
     free(s);
 }
 
-static int reduce_steps_from(Term **current, int step_limit, const Env *env)
+static void print_term_with_matches(const char *prefix, const Term *term, const Env *env)
+{
+    print_term_with_matches_suffix(prefix, term, env, "");
+}
+
+static int term_can_reduce(const Term *term)
+{
+    int changed = 0;
+    Term *next = term_reduce_once(term, &changed);
+    term_free(next);
+    return changed;
+}
+
+static void print_numbered_term(LineResults *lines, const char *marker,
+                                const Term *term, const Env *env,
+                                const char *suffix)
+{
+    size_t line_no = line_results_add(lines, term);
+    char prefix[64];
+    snprintf(prefix, sizeof prefix, "[%zu]>%s ", line_no, marker);
+    print_term_with_matches_suffix(prefix, term, env, suffix);
+}
+
+static int reduce_steps_from(Term **current, int step_limit)
 {
     int steps_taken = 0;
 
@@ -1540,14 +1559,12 @@ static int reduce_steps_from(Term **current, int step_limit, const Env *env)
         Term *next = term_reduce_once(*current, &changed);
         if (!changed) {
             term_free(next);
-            output_printf("Already in normal form.\n");
             break;
         }
 
         term_free(*current);
         *current = next;
         steps_taken++;
-        print_term_with_matches(STEP_PREFIX, *current, env);
     }
 
     return steps_taken;
@@ -1555,7 +1572,7 @@ static int reduce_steps_from(Term **current, int step_limit, const Env *env)
 
 static int evaluate_and_print(Term *parsed, const Env *env,
                               const Term *last_output,
-                              const LineResults *lines,
+                              LineResults *lines,
                               int max_steps, int step_limit,
                               Term **out_final)
 {
@@ -1579,7 +1596,7 @@ static int evaluate_and_print(Term *parsed, const Env *env,
     Term *current = expanded;
     if (shallow_changed) {
         print_term_with_matches("  ", shallow, env);
-    } else {
+    } else if (!curses_started && !step_limit) {
         print_term_with_matches("  ", current, env);
     }
 
@@ -1589,12 +1606,17 @@ static int evaluate_and_print(Term *parsed, const Env *env,
     term_free(shallow);
 
     if (step_limit) {
-        reduce_steps_from(&current, step_limit, env);
+        int steps = reduce_steps_from(&current, step_limit);
+        if (steps > 0) {
+            print_numbered_term(lines, "ᵦ", current, env,
+                                term_can_reduce(current) ? "  (...)" : "");
+        }
         if (out_final) *out_final = term_clone(current);
         term_free(current);
         return 1;
     }
 
+    int numbered_printed = 0;
     for (int step = 1; step <= max_steps; step++) {
         int changed = 0;
         Term *next = term_reduce_once(current, &changed);
@@ -1606,7 +1628,14 @@ static int evaluate_and_print(Term *parsed, const Env *env,
         term_free(current);
         current = next;
 
-        print_term_with_matches(STEP_PREFIX, current, env);
+        int more = term_can_reduce(current);
+        if (more && step < max_steps) {
+            print_term_with_matches(STEP_PREFIX, current, env);
+        } else {
+            print_numbered_term(lines, "ᵦ", current, env,
+                                more ? "  (...)" : "");
+            numbered_printed = 1;
+        }
 
         if (step == max_steps) {
             output_printf("Stopped after %d steps; term may not have a normal form.\n",
@@ -1614,6 +1643,9 @@ static int evaluate_and_print(Term *parsed, const Env *env,
         }
     }
 
+    if (!numbered_printed) {
+        print_numbered_term(lines, "", current, env, "");
+    }
     if (out_final) *out_final = term_clone(current);
     term_free(current);
     return 1;
@@ -1772,7 +1804,7 @@ static int load_definitions_from_file(Env *env, const char *path,
 
 static int evaluate_source_stdout(const char *source, Env *env,
                                   Term **last_output,
-                                  const LineResults *lines,
+                                  LineResults *lines,
                                   StepSession *session,
                                   int max_steps, Term **out_result)
 {
@@ -1788,8 +1820,11 @@ static int evaluate_source_stdout(const char *source, Env *env,
 
     if (copy[0] == '\0') {
         if (!step_limit) {
-            free(copy);
-            return 0;
+            if (!session || !session->current) {
+                free(copy);
+                return 0;
+            }
+            step_limit = 1;
         }
         if (!session || !session->current) {
             fprintf(stderr, "No gradual reduction to continue.\n");
@@ -1798,7 +1833,13 @@ static int evaluate_source_stdout(const char *source, Env *env,
         }
 
         Term *current = term_clone(session->current);
-        reduce_steps_from(&current, step_limit, env);
+        int steps = reduce_steps_from(&current, step_limit);
+        if (steps == 0) {
+            fprintf(stderr, "Already in normal form.\n");
+        } else {
+            print_numbered_term(lines, "ᵦ", current, env,
+                                term_can_reduce(current) ? "  (...)" : "");
+        }
         step_session_set(session, current);
         if (last_output) {
             replace_term(last_output, current);
@@ -1841,7 +1882,7 @@ static int evaluate_source_stdout(const char *source, Env *env,
 
     if (shallow_changed) {
         print_term_with_matches("  ", shallow, env);
-    } else {
+    } else if (!step_limit) {
         print_term_with_matches("  ", current, env);
     }
 
@@ -1852,7 +1893,11 @@ static int evaluate_source_stdout(const char *source, Env *env,
     term_free(parsed);
 
     if (step_limit) {
-        reduce_steps_from(&current, step_limit, env);
+        int steps = reduce_steps_from(&current, step_limit);
+        if (steps > 0) {
+            print_numbered_term(lines, "ᵦ", current, env,
+                                term_can_reduce(current) ? "  (...)" : "");
+        }
         if (session) step_session_set(session, current);
         if (last_output) {
             replace_term(last_output, current);
@@ -1866,6 +1911,7 @@ static int evaluate_source_stdout(const char *source, Env *env,
 
     if (session) step_session_clear(session);
 
+    int numbered_printed = 0;
     for (int step = 1; step <= max_steps; step++) {
         int changed = 0;
         Term *next = term_reduce_once(current, &changed);
@@ -1877,7 +1923,14 @@ static int evaluate_source_stdout(const char *source, Env *env,
         term_free(current);
         current = next;
 
-        print_term_with_matches(STEP_PREFIX, current, env);
+        int more = term_can_reduce(current);
+        if (more && step < max_steps) {
+            print_term_with_matches(STEP_PREFIX, current, env);
+        } else {
+            print_numbered_term(lines, "ᵦ", current, env,
+                                more ? "  (...)" : "");
+            numbered_printed = 1;
+        }
 
         if (step == max_steps) {
             printf("Stopped after %d steps; term may not have a normal form.\n",
@@ -1885,6 +1938,9 @@ static int evaluate_source_stdout(const char *source, Env *env,
         }
     }
 
+    if (!numbered_printed) {
+        print_numbered_term(lines, "", current, env, "");
+    }
     if (last_output) {
         replace_term(last_output, current);
         env_recompute_normals(env, *last_output, max_steps);
@@ -1901,8 +1957,8 @@ static void print_usage(FILE *out, const char *prog)
     fprintf(out, "\n");
     fprintf(out, "Launch the interactive ncurses reducer when no EXPR is given.\n");
     fprintf(out, "With expressions, reduce them in order and print each step.\n");
-    fprintf(out, "Reduction uses normal-order beta reduction; steps are shown with →ᵦ.\n");
-    fprintf(out, "Use %% for the previous result, %%N for line N, and trailing / or /N for gradual reduction.\n");
+    fprintf(out, "Reduction uses normal-order beta reduction; final results are numbered as [N]>.\n");
+    fprintf(out, "Use %% for the previous numbered result, %%N for output line N, and trailing / or /N for gradual reduction.\n");
     fprintf(out, "\n");
     fprintf(out, "Options:\n");
     fprintf(out, "  -d, --define NAME=TERM  save a lazy definition before reducing expressions\n");
@@ -1938,13 +1994,11 @@ static int run_batch(int argc, char **argv, Env *env)
 
         if (strcmp(arg, "--") == 0) {
             for (i++; i < argc; i++) {
-                line_results_add(&lines, NULL);
                 Term *result = NULL;
                 int rc = evaluate_source_stdout(argv[i], env, &last_output,
                                                 &lines, &session,
                                                 settings.max_steps, &result);
                 status |= rc;
-                line_results_set(&lines, lines.count, rc == 0 ? result : NULL);
                 term_free(result);
             }
             term_free(last_output);
@@ -2084,13 +2138,11 @@ static int run_batch(int argc, char **argv, Env *env)
                 line_results_free(&lines);
                 return missing_arg(arg);
             }
-            line_results_add(&lines, NULL);
             Term *result = NULL;
             int rc = evaluate_source_stdout(argv[i], env, &last_output,
                                             &lines, &session,
                                             settings.max_steps, &result);
             status |= rc;
-            line_results_set(&lines, lines.count, rc == 0 ? result : NULL);
             term_free(result);
             continue;
         }
@@ -2104,13 +2156,11 @@ static int run_batch(int argc, char **argv, Env *env)
             return 2;
         }
 
-        line_results_add(&lines, NULL);
         Term *result = NULL;
         int rc = evaluate_source_stdout(arg, env, &last_output,
                                         &lines, &session,
                                         settings.max_steps, &result);
         status |= rc;
-        line_results_set(&lines, lines.count, rc == 0 ? result : NULL);
         term_free(result);
     }
 
@@ -2150,32 +2200,29 @@ static int run_interactive(Env *env)
     Settings settings = { DEFAULT_MAX_STEPS };
 
     while (1) {
-        char prompt[32];
-        snprintf(prompt, sizeof prompt, "λ[%zu]> ", lines.count + 1);
-
-        if (!read_lambda_line(prompt, line, sizeof line, &history)) break;
+        if (!read_lambda_line("λ> ", line, sizeof line, &history)) break;
 
         char *input = trim_in_place(line);
 
         if (*input == '\0') {
             if (!session.current) continue;
 
-            line_results_add(&lines, NULL);
-            size_t current_line = lines.count;
-
             Term *current = term_clone(session.current);
-            reduce_steps_from(&current, 1, env);
+            int steps = reduce_steps_from(&current, 1);
+            if (steps == 0) {
+                output_printf("Already in normal form.\n");
+            } else {
+                print_numbered_term(&lines, "ᵦ", current, env,
+                                    term_can_reduce(current) ? "  (...)" : "");
+            }
             step_session_set(&session, current);
             replace_term(&last_output, current);
             env_recompute_normals(env, last_output, settings.max_steps);
-            line_results_set(&lines, current_line, current);
             term_free(current);
             continue;
         }
 
         history_add(&history, input);
-        line_results_add(&lines, NULL);
-        size_t current_line = lines.count;
 
         if (strcmp(input, ":q") == 0 || strcmp(input, ":quit") == 0) {
             break;
@@ -2308,8 +2355,6 @@ static int run_interactive(Env *env)
                 continue;
             }
 
-            line_results_set(&lines, current_line, saved);
-
             char *pretty = term_to_string(saved, 1);
             char *name = trim_in_place(input);
             output_printf("Saved %s %s %s\n", name, reduced_first ? "<-" : "=", pretty);
@@ -2335,11 +2380,16 @@ static int run_interactive(Env *env)
             }
 
             Term *current = term_clone(session.current);
-            reduce_steps_from(&current, step_limit, env);
+            int steps = reduce_steps_from(&current, step_limit);
+            if (steps == 0) {
+                output_printf("Already in normal form.\n");
+            } else {
+                print_numbered_term(&lines, "ᵦ", current, env,
+                                    term_can_reduce(current) ? "  (...)" : "");
+            }
             step_session_set(&session, current);
             replace_term(&last_output, current);
             env_recompute_normals(env, last_output, settings.max_steps);
-            line_results_set(&lines, current_line, current);
             term_free(current);
             continue;
         }
@@ -2359,7 +2409,6 @@ static int run_interactive(Env *env)
                 step_session_clear(&session);
             }
             replace_term(&last_output, new_last);
-            line_results_set(&lines, current_line, new_last);
             env_recompute_normals(env, last_output, settings.max_steps);
         }
         term_free(new_last);
