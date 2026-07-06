@@ -20,7 +20,7 @@
 
 #define DEFAULT_MAX_STEPS LAMBDA_DEFAULT_MAX_STEPS
 #define LINE_CAP 4096
-#define VERSION "0.1.12"
+#define VERSION "0.1.13"
 #define STEP_PREFIX "→ᵦ "
 
 typedef struct {

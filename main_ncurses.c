@@ -32,7 +32,7 @@
 #define SCROLLBACK_CAP 4096
 #define MAX_DEFS 128
 #define DEFAULT_MAX_STEPS LAMBDA_DEFAULT_MAX_STEPS
-#define VERSION "0.1.12"
+#define VERSION "0.1.13"
 #define STEP_PREFIX "→ᵦ "
 #ifndef LAMBDA_DATADIR
 #define LAMBDA_DATADIR "/usr/share/lambda"
