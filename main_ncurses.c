@@ -32,7 +32,7 @@
 #define SCROLLBACK_CAP 4096
 #define MAX_DEFS 128
 #define DEFAULT_MAX_STEPS LAMBDA_DEFAULT_MAX_STEPS
-#define VERSION "0.1.14"
+#define VERSION "0.2"
 #define STEP_PREFIX_BETA " →ᵦ "
 #define STEP_PREFIX_ETA " →η "
 #ifndef LAMBDA_DATADIR
