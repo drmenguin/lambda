@@ -14,6 +14,19 @@ expression is supplied, it reads expressions line by line from standard input.
 .PP
 Expressions use normal-order beta reduction. Reduction steps are marked with
 .BR →ᵦ .
+Across expressions in one invocation or standard-input session,
+.B %
+refers to the previous result and
+.BI % N
+refers to numbered line
+.IR N .
+A trailing
+.B /
+or
+.BI / N
+performs gradual reduction by one or
+.I N
+steps.
 .PP
 This command is the minimal non-ncurses front end. Use
 .BR lambda (1)
@@ -53,6 +66,33 @@ Lowercase letters split into variables, so this means
 .TP
 .B x1 x2
 Subscript-style variables.
+.TP
+.B %
+Previous reduction result.
+History references are reserved and cannot be lambda parameters.
+.TP
+.BI % N
+Reduction result from numbered line
+.IR N .
+.TP
+.B TERM /
+Reduce
+.I TERM
+by one beta step and stop.
+.TP
+.BI TERM\ / N
+Reduce
+.I TERM
+by
+.I N
+beta steps and stop.
+.TP
+.BI / N
+Continue the previous gradual reduction by
+.I N
+steps. A bare
+.B /
+continues by one step.
 .SH EXAMPLES
 .TP
 .B lambda-cli '(\ex.x) y'

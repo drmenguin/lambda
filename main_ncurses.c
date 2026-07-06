@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,6 +59,16 @@ typedef struct {
     char *items[HISTORY_CAP];
     size_t count;
 } History;
+
+typedef struct {
+    Term **items;
+    size_t count;
+    size_t cap;
+} LineResults;
+
+typedef struct {
+    Term *current;
+} StepSession;
 
 typedef struct {
     char *lines[SCROLLBACK_CAP];
@@ -415,6 +426,75 @@ static void history_add(History *history, const char *line)
     history->items[history->count++] = xstrdup_main(line);
 }
 
+static int parse_line_ref_name(const char *name, size_t *line_no)
+{
+    if (name[0] != '%' || !isdigit((unsigned char)name[1])) return 0;
+
+    errno = 0;
+    char *end = NULL;
+    unsigned long value = strtoul(name + 1, &end, 10);
+    if (*end != '\0' || errno == ERANGE || value == 0 ||
+        value > (unsigned long)SIZE_MAX) {
+        return 0;
+    }
+
+    *line_no = (size_t)value;
+    return 1;
+}
+
+static Term *line_results_get(const LineResults *lines, size_t line_no)
+{
+    if (!lines || line_no == 0 || line_no > lines->count) return NULL;
+    return lines->items[line_no - 1];
+}
+
+static void line_results_add(LineResults *lines, const Term *term)
+{
+    if (lines->count == lines->cap) {
+        size_t new_cap = lines->cap ? lines->cap * 2 : 64;
+        Term **new_items = realloc(lines->items, new_cap * sizeof lines->items[0]);
+        if (!new_items) {
+            if (curses_started) endwin();
+            fprintf(stderr, "out of memory\n");
+            exit(EXIT_FAILURE);
+        }
+        lines->items = new_items;
+        lines->cap = new_cap;
+    }
+
+    lines->items[lines->count++] = term ? term_clone(term) : NULL;
+}
+
+static void line_results_set(LineResults *lines, size_t line_no, const Term *term)
+{
+    if (line_no == 0 || line_no > lines->count) return;
+    term_free(lines->items[line_no - 1]);
+    lines->items[line_no - 1] = term ? term_clone(term) : NULL;
+}
+
+static void line_results_free(LineResults *lines)
+{
+    for (size_t i = 0; i < lines->count; i++) term_free(lines->items[i]);
+    free(lines->items);
+}
+
+static void replace_term(Term **slot, const Term *term)
+{
+    term_free(*slot);
+    *slot = term ? term_clone(term) : NULL;
+}
+
+static void step_session_set(StepSession *session, const Term *term)
+{
+    replace_term(&session->current, term);
+}
+
+static void step_session_clear(StepSession *session)
+{
+    term_free(session->current);
+    session->current = NULL;
+}
+
 static void env_free(Env *env)
 {
     for (size_t i = 0; i < env->count; i++) {
@@ -500,6 +580,7 @@ static int name_in_list(const char *name, const char **xs, size_t n)
 
 static Term *expand_defs_rec(const Term *t, const Env *env,
                              const Term *last_output,
+                             const LineResults *lines,
                              const char **bound, size_t nbound,
                              const char **expanding, size_t nexpanding,
                              char *err, size_t errsz)
@@ -507,6 +588,7 @@ static Term *expand_defs_rec(const Term *t, const Env *env,
     switch (t->type) {
         case TERM_VAR: {
             const char *name = t->as.var.name;
+            size_t line_no = 0;
 
             if (name_in_list(name, bound, nbound)) {
                 return term_clone(t);
@@ -518,6 +600,15 @@ static Term *expand_defs_rec(const Term *t, const Env *env,
                     return NULL;
                 }
                 return term_clone(last_output);
+            }
+
+            if (parse_line_ref_name(name, &line_no)) {
+                Term *line = line_results_get(lines, line_no);
+                if (!line) {
+                    snprintf(err, errsz, "no reduction result for line %zu", line_no);
+                    return NULL;
+                }
+                return term_clone(line);
             }
 
             ssize_t idx = env_find(env, name);
@@ -534,15 +625,18 @@ static Term *expand_defs_rec(const Term *t, const Env *env,
             for (size_t i = 0; i < nexpanding; i++) new_expanding[i] = expanding[i];
             new_expanding[nexpanding] = name;
 
-            return expand_defs_rec(env->items[idx].term, env, last_output, bound, nbound,
+            return expand_defs_rec(env->items[idx].term, env, last_output, lines,
+                                   bound, nbound,
                                    new_expanding, nexpanding + 1, err, errsz);
         }
 
         case TERM_APP: {
-            Term *l = expand_defs_rec(t->as.app.left, env, last_output, bound, nbound,
+            Term *l = expand_defs_rec(t->as.app.left, env, last_output, lines,
+                                      bound, nbound,
                                       expanding, nexpanding, err, errsz);
             if (!l) return NULL;
-            Term *r = expand_defs_rec(t->as.app.right, env, last_output, bound, nbound,
+            Term *r = expand_defs_rec(t->as.app.right, env, last_output, lines,
+                                      bound, nbound,
                                       expanding, nexpanding, err, errsz);
             if (!r) {
                 term_free(l);
@@ -560,7 +654,7 @@ static Term *expand_defs_rec(const Term *t, const Env *env,
             for (size_t i = 0; i < nbound; i++) new_bound[i] = bound[i];
             new_bound[nbound] = t->as.abs.param;
 
-            Term *body = expand_defs_rec(t->as.abs.body, env, last_output,
+            Term *body = expand_defs_rec(t->as.abs.body, env, last_output, lines,
                                          new_bound, nbound + 1,
                                          expanding, nexpanding, err, errsz);
             if (!body) return NULL;
@@ -572,22 +666,25 @@ static Term *expand_defs_rec(const Term *t, const Env *env,
 }
 
 static Term *expand_defs(const Term *t, const Env *env, const Term *last_output,
-                         char *err, size_t errsz)
+                         const LineResults *lines, char *err, size_t errsz)
 {
     const char *bound[1];
     const char *expanding[1];
     if (err && errsz) err[0] = '\0';
-    return expand_defs_rec(t, env, last_output, bound, 0, expanding, 0, err, errsz);
+    return expand_defs_rec(t, env, last_output, lines, bound, 0,
+                           expanding, 0, err, errsz);
 }
 
 static Term *expand_defs_shallow_rec(const Term *t, const Env *env,
                                      const Term *last_output,
+                                     const LineResults *lines,
                                      const char **bound, size_t nbound,
                                      int *changed, char *err, size_t errsz)
 {
     switch (t->type) {
         case TERM_VAR: {
             const char *name = t->as.var.name;
+            size_t line_no = 0;
 
             if (name_in_list(name, bound, nbound)) {
                 return term_clone(t);
@@ -602,6 +699,16 @@ static Term *expand_defs_shallow_rec(const Term *t, const Env *env,
                 return term_clone(last_output);
             }
 
+            if (parse_line_ref_name(name, &line_no)) {
+                Term *line = line_results_get(lines, line_no);
+                if (!line) {
+                    snprintf(err, errsz, "no reduction result for line %zu", line_no);
+                    return NULL;
+                }
+                if (changed) *changed = 1;
+                return term_clone(line);
+            }
+
             ssize_t idx = env_find(env, name);
             if (idx < 0) {
                 return term_clone(t);
@@ -613,9 +720,11 @@ static Term *expand_defs_shallow_rec(const Term *t, const Env *env,
 
         case TERM_APP: {
             Term *l = expand_defs_shallow_rec(t->as.app.left, env, last_output,
+                                              lines,
                                               bound, nbound, changed, err, errsz);
             if (!l) return NULL;
             Term *r = expand_defs_shallow_rec(t->as.app.right, env, last_output,
+                                              lines,
                                               bound, nbound, changed, err, errsz);
             if (!r) {
                 term_free(l);
@@ -634,6 +743,7 @@ static Term *expand_defs_shallow_rec(const Term *t, const Env *env,
             new_bound[nbound] = t->as.abs.param;
 
             Term *body = expand_defs_shallow_rec(t->as.abs.body, env, last_output,
+                                                 lines,
                                                  new_bound, nbound + 1,
                                                  changed, err, errsz);
             if (!body) return NULL;
@@ -646,23 +756,26 @@ static Term *expand_defs_shallow_rec(const Term *t, const Env *env,
 
 static Term *expand_defs_shallow(const Term *t, const Env *env,
                                  const Term *last_output,
+                                 const LineResults *lines,
                                  int *changed, char *err, size_t errsz)
 {
     const char *bound[1];
     if (changed) *changed = 0;
     if (err && errsz) err[0] = '\0';
-    return expand_defs_shallow_rec(t, env, last_output, bound, 0,
+    return expand_defs_shallow_rec(t, env, last_output, lines, bound, 0,
                                    changed, err, errsz);
 }
 
 static Term *capture_last_output_refs_rec(const Term *t,
                                           const Term *last_output,
+                                          const LineResults *lines,
                                           const char **bound, size_t nbound,
                                           char *err, size_t errsz)
 {
     switch (t->type) {
         case TERM_VAR: {
             const char *name = t->as.var.name;
+            size_t line_no = 0;
 
             if (name_in_list(name, bound, nbound)) {
                 return term_clone(t);
@@ -676,14 +789,25 @@ static Term *capture_last_output_refs_rec(const Term *t,
                 return term_clone(last_output);
             }
 
+            if (parse_line_ref_name(name, &line_no)) {
+                Term *line = line_results_get(lines, line_no);
+                if (!line) {
+                    snprintf(err, errsz, "no reduction result for line %zu", line_no);
+                    return NULL;
+                }
+                return term_clone(line);
+            }
+
             return term_clone(t);
         }
 
         case TERM_APP: {
             Term *l = capture_last_output_refs_rec(t->as.app.left, last_output,
+                                                   lines,
                                                    bound, nbound, err, errsz);
             if (!l) return NULL;
             Term *r = capture_last_output_refs_rec(t->as.app.right, last_output,
+                                                   lines,
                                                    bound, nbound, err, errsz);
             if (!r) {
                 term_free(l);
@@ -703,6 +827,7 @@ static Term *capture_last_output_refs_rec(const Term *t,
 
             Term *body = capture_last_output_refs_rec(t->as.abs.body,
                                                       last_output,
+                                                      lines,
                                                       new_bound, nbound + 1,
                                                       err, errsz);
             if (!body) return NULL;
@@ -714,11 +839,13 @@ static Term *capture_last_output_refs_rec(const Term *t,
 }
 
 static Term *capture_last_output_refs(const Term *t, const Term *last_output,
+                                      const LineResults *lines,
                                       char *err, size_t errsz)
 {
     const char *bound[1];
     if (err && errsz) err[0] = '\0';
-    return capture_last_output_refs_rec(t, last_output, bound, 0, err, errsz);
+    return capture_last_output_refs_rec(t, last_output, lines, bound, 0,
+                                        err, errsz);
 }
 
 static Term *reduce_expanded_normal_form(const Term *t, const Env *env,
@@ -727,7 +854,7 @@ static Term *reduce_expanded_normal_form(const Term *t, const Env *env,
                                          int *stopped_early,
                                          char *err, size_t errsz)
 {
-    Term *expanded = expand_defs(t, env, last_output, err, errsz);
+    Term *expanded = expand_defs(t, env, last_output, NULL, err, errsz);
     if (!expanded) return NULL;
 
     int steps = 0;
@@ -792,6 +919,37 @@ static int parse_positive_int_arg(const char *arg, const char *label,
     }
 
     *out = (int)value;
+    return 1;
+}
+
+static int parse_step_suffix(char *input, int *step_limit, char *err, size_t errsz)
+{
+    *step_limit = 0;
+
+    char *end = input + strlen(input);
+    while (end > input && isspace((unsigned char)end[-1])) {
+        *--end = '\0';
+    }
+
+    char *digits = end;
+    while (digits > input && isdigit((unsigned char)digits[-1])) digits--;
+
+    if (digits == input || digits[-1] != '/') return 1;
+
+    char *slash = digits - 1;
+    const char *number = digits;
+
+    if (*number == '\0') {
+        *step_limit = 1;
+    } else if (!parse_positive_int_arg(number, "/", step_limit, err, errsz)) {
+        return 0;
+    }
+
+    *slash = '\0';
+    while (slash > input && isspace((unsigned char)slash[-1])) {
+        *--slash = '\0';
+    }
+
     return 1;
 }
 
@@ -1184,6 +1342,11 @@ static void print_help(void)
     output_printf("  M = \\x.x       save a named definition\n");
     output_printf("  M <- (\\x.x) y  reduce first, then save the result as M\n");
     output_printf("  %%              previous reduction result\n");
+    output_printf("  %%2             reduction result from line 2\n");
+    output_printf("  %% refs          reserved; not valid lambda parameters\n");
+    output_printf("  term /          reduce term by one beta step\n");
+    output_printf("  term /2         reduce term by two beta steps\n");
+    output_printf("  /2              continue the previous gradual reduction by two steps\n");
     output_printf("  M y            use a named definition\n");
     output_printf("  :def M         show how M is defined\n");
     output_printf("  :free M        remove a saved definition\n");
@@ -1368,21 +1531,45 @@ static void print_term_with_matches(const char *prefix, const Term *term, const 
     free(s);
 }
 
+static int reduce_steps_from(Term **current, int step_limit, const Env *env)
+{
+    int steps_taken = 0;
+
+    for (int step = 1; step <= step_limit; step++) {
+        int changed = 0;
+        Term *next = term_reduce_once(*current, &changed);
+        if (!changed) {
+            term_free(next);
+            output_printf("Already in normal form.\n");
+            break;
+        }
+
+        term_free(*current);
+        *current = next;
+        steps_taken++;
+        print_term_with_matches(STEP_PREFIX, *current, env);
+    }
+
+    return steps_taken;
+}
+
 static int evaluate_and_print(Term *parsed, const Env *env,
-                              const Term *last_output, int max_steps,
+                              const Term *last_output,
+                              const LineResults *lines,
+                              int max_steps, int step_limit,
                               Term **out_final)
 {
     char err[256];
 
     int shallow_changed = 0;
-    Term *shallow = expand_defs_shallow(parsed, env, last_output,
+    Term *shallow = expand_defs_shallow(parsed, env, last_output, lines,
                                         &shallow_changed, err, sizeof err);
     if (!shallow) {
         output_printf("Expansion error: %s\n", err);
         return 0;
     }
 
-    Term *expanded = expand_defs(parsed, env, last_output, err, sizeof err);
+    Term *expanded = expand_defs(parsed, env, last_output, lines, err, sizeof err);
     if (!expanded) {
         output_printf("Expansion error: %s\n", err);
         term_free(shallow);
@@ -1400,6 +1587,13 @@ static int evaluate_and_print(Term *parsed, const Env *env,
         print_term_with_matches(STEP_PREFIX, current, env);
     }
     term_free(shallow);
+
+    if (step_limit) {
+        reduce_steps_from(&current, step_limit, env);
+        if (out_final) *out_final = term_clone(current);
+        term_free(current);
+        return 1;
+    }
 
     for (int step = 1; step <= max_steps; step++) {
         int changed = 0;
@@ -1426,7 +1620,9 @@ static int evaluate_and_print(Term *parsed, const Env *env,
 }
 
 static int save_definition_from_input(Env *env, char *input, char *err, size_t errsz,
-                                      const Term *last_output, Term **saved,
+                                      const Term *last_output,
+                                      const LineResults *lines,
+                                      Term **saved,
                                       int *reduced_first, int *stopped_early,
                                       const char *source, int max_steps)
 {
@@ -1458,7 +1654,7 @@ static int save_definition_from_input(Env *env, char *input, char *err, size_t e
     Term *t = parse_lambda(rhs, err, errsz);
     if (!t) return 0;
 
-    Term *captured = capture_last_output_refs(t, last_output, err, errsz);
+    Term *captured = capture_last_output_refs(t, last_output, lines, err, errsz);
     term_free(t);
     if (!captured) return 0;
     t = captured;
@@ -1492,13 +1688,13 @@ static int save_definition_from_input(Env *env, char *input, char *err, size_t e
 }
 
 static int define_from_arg(Env *env, const char *arg, const Term *last_output,
-                           int max_steps)
+                           const LineResults *lines, int max_steps)
 {
     char err[256];
     char *copy = xstrdup_main(arg);
 
     if (!save_definition_from_input(env, copy, err, sizeof err, last_output,
-                                    NULL, NULL, NULL, NULL, max_steps)) {
+                                    lines, NULL, NULL, NULL, NULL, max_steps)) {
         fprintf(stderr, "Definition error: %s\n", err);
         free(copy);
         return 1;
@@ -1553,7 +1749,8 @@ static int load_definitions_from_file(Env *env, const char *path,
 
         char def_err[256];
         if (!save_definition_from_input(env, input, def_err, sizeof def_err,
-                                        last_output, NULL, NULL, NULL, path,
+                                        last_output, NULL,
+                                        NULL, NULL, NULL, path,
                                         max_steps)) {
             snprintf(err, errsz, "%s:%zu: %s", path, line_no, def_err);
             fclose(f);
@@ -1574,31 +1771,71 @@ static int load_definitions_from_file(Env *env, const char *path,
 }
 
 static int evaluate_source_stdout(const char *source, Env *env,
-                                  Term **last_output, int max_steps)
+                                  Term **last_output,
+                                  const LineResults *lines,
+                                  StepSession *session,
+                                  int max_steps, Term **out_result)
 {
     char err[256];
-    Term *parsed = parse_lambda(source, err, sizeof err);
+    char *copy = xstrdup_main(source);
+    int step_limit = 0;
+
+    if (!parse_step_suffix(copy, &step_limit, err, sizeof err)) {
+        fprintf(stderr, "Parse error: %s\n", err);
+        free(copy);
+        return 1;
+    }
+
+    if (copy[0] == '\0') {
+        if (!step_limit) {
+            free(copy);
+            return 0;
+        }
+        if (!session || !session->current) {
+            fprintf(stderr, "No gradual reduction to continue.\n");
+            free(copy);
+            return 1;
+        }
+
+        Term *current = term_clone(session->current);
+        reduce_steps_from(&current, step_limit, env);
+        step_session_set(session, current);
+        if (last_output) {
+            replace_term(last_output, current);
+            env_recompute_normals(env, *last_output, max_steps);
+        }
+        if (out_result) *out_result = term_clone(current);
+        term_free(current);
+        free(copy);
+        return 0;
+    }
+
+    Term *parsed = parse_lambda(copy, err, sizeof err);
     if (!parsed) {
         fprintf(stderr, "Parse error: %s\n", err);
+        free(copy);
         return 1;
     }
 
     int shallow_changed = 0;
     Term *shallow = expand_defs_shallow(parsed, env,
                                         last_output ? *last_output : NULL,
+                                        lines,
                                         &shallow_changed, err, sizeof err);
     if (!shallow) {
         fprintf(stderr, "Expansion error: %s\n", err);
         term_free(parsed);
+        free(copy);
         return 1;
     }
 
     Term *current = expand_defs(parsed, env, last_output ? *last_output : NULL,
-                                err, sizeof err);
+                                lines, err, sizeof err);
     if (!current) {
         fprintf(stderr, "Expansion error: %s\n", err);
         term_free(shallow);
         term_free(parsed);
+        free(copy);
         return 1;
     }
 
@@ -1613,6 +1850,21 @@ static int evaluate_source_stdout(const char *source, Env *env,
     }
     term_free(shallow);
     term_free(parsed);
+
+    if (step_limit) {
+        reduce_steps_from(&current, step_limit, env);
+        if (session) step_session_set(session, current);
+        if (last_output) {
+            replace_term(last_output, current);
+            env_recompute_normals(env, *last_output, max_steps);
+        }
+        if (out_result) *out_result = term_clone(current);
+        term_free(current);
+        free(copy);
+        return 0;
+    }
+
+    if (session) step_session_clear(session);
 
     for (int step = 1; step <= max_steps; step++) {
         int changed = 0;
@@ -1634,11 +1886,12 @@ static int evaluate_source_stdout(const char *source, Env *env,
     }
 
     if (last_output) {
-        term_free(*last_output);
-        *last_output = term_clone(current);
+        replace_term(last_output, current);
         env_recompute_normals(env, *last_output, max_steps);
     }
+    if (out_result) *out_result = term_clone(current);
     term_free(current);
+    free(copy);
     return 0;
 }
 
@@ -1649,6 +1902,7 @@ static void print_usage(FILE *out, const char *prog)
     fprintf(out, "Launch the interactive ncurses reducer when no EXPR is given.\n");
     fprintf(out, "With expressions, reduce them in order and print each step.\n");
     fprintf(out, "Reduction uses normal-order beta reduction; steps are shown with →ᵦ.\n");
+    fprintf(out, "Use %% for the previous result, %%N for line N, and trailing / or /N for gradual reduction.\n");
     fprintf(out, "\n");
     fprintf(out, "Options:\n");
     fprintf(out, "  -d, --define NAME=TERM  save a lazy definition before reducing expressions\n");
@@ -1675,6 +1929,8 @@ static int run_batch(int argc, char **argv, Env *env)
 {
     int status = 0;
     Term *last_output = NULL;
+    LineResults lines = {0};
+    StepSession session = {0};
     Settings settings = { DEFAULT_MAX_STEPS };
 
     for (int i = 1; i < argc; i++) {
@@ -1682,37 +1938,51 @@ static int run_batch(int argc, char **argv, Env *env)
 
         if (strcmp(arg, "--") == 0) {
             for (i++; i < argc; i++) {
-                status |= evaluate_source_stdout(argv[i], env, &last_output,
-                                                 settings.max_steps);
+                line_results_add(&lines, NULL);
+                Term *result = NULL;
+                int rc = evaluate_source_stdout(argv[i], env, &last_output,
+                                                &lines, &session,
+                                                settings.max_steps, &result);
+                status |= rc;
+                line_results_set(&lines, lines.count, rc == 0 ? result : NULL);
+                term_free(result);
             }
             term_free(last_output);
+            step_session_clear(&session);
+            line_results_free(&lines);
             return status;
         }
 
         if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
             print_usage(stdout, argv[0]);
             term_free(last_output);
+            step_session_clear(&session);
+            line_results_free(&lines);
             return 0;
         }
 
         if (strcmp(arg, "-V") == 0 || strcmp(arg, "--version") == 0) {
             printf("lambda %s\n", VERSION);
             term_free(last_output);
+            step_session_clear(&session);
+            line_results_free(&lines);
             return 0;
         }
 
         if (strcmp(arg, "-d") == 0 || strcmp(arg, "--define") == 0) {
             if (++i >= argc) {
                 term_free(last_output);
+                step_session_clear(&session);
+                line_results_free(&lines);
                 return missing_arg(arg);
             }
-            status |= define_from_arg(env, argv[i], last_output,
+            status |= define_from_arg(env, argv[i], last_output, &lines,
                                       settings.max_steps);
             continue;
         }
 
         if (strncmp(arg, "--define=", 9) == 0) {
-            status |= define_from_arg(env, arg + 9, last_output,
+            status |= define_from_arg(env, arg + 9, last_output, &lines,
                                       settings.max_steps);
             continue;
         }
@@ -1720,6 +1990,8 @@ static int run_batch(int argc, char **argv, Env *env)
         if (strcmp(arg, "-l") == 0 || strcmp(arg, "--load") == 0) {
             if (++i >= argc) {
                 term_free(last_output);
+                step_session_clear(&session);
+                line_results_free(&lines);
                 return missing_arg(arg);
             }
             char err[512];
@@ -1748,6 +2020,8 @@ static int run_batch(int argc, char **argv, Env *env)
         if (strcmp(arg, "-f") == 0 || strcmp(arg, "--free") == 0) {
             if (++i >= argc) {
                 term_free(last_output);
+                step_session_clear(&session);
+                line_results_free(&lines);
                 return missing_arg(arg);
             }
             if (!env_remove(env, argv[i])) {
@@ -1772,6 +2046,8 @@ static int run_batch(int argc, char **argv, Env *env)
         if (strcmp(arg, "--max-steps") == 0) {
             if (++i >= argc) {
                 term_free(last_output);
+                step_session_clear(&session);
+                line_results_free(&lines);
                 return missing_arg(arg);
             }
             char err[256];
@@ -1779,6 +2055,8 @@ static int run_batch(int argc, char **argv, Env *env)
                                         &settings.max_steps, err, sizeof err)) {
                 fprintf(stderr, "%s\n", err);
                 term_free(last_output);
+                step_session_clear(&session);
+                line_results_free(&lines);
                 return 2;
             }
             env_recompute_normals(env, last_output, settings.max_steps);
@@ -1791,6 +2069,8 @@ static int run_batch(int argc, char **argv, Env *env)
                                         &settings.max_steps, err, sizeof err)) {
                 fprintf(stderr, "%s\n", err);
                 term_free(last_output);
+                step_session_clear(&session);
+                line_results_free(&lines);
                 return 2;
             }
             env_recompute_normals(env, last_output, settings.max_steps);
@@ -1800,10 +2080,18 @@ static int run_batch(int argc, char **argv, Env *env)
         if (strcmp(arg, "-e") == 0 || strcmp(arg, "--eval") == 0) {
             if (++i >= argc) {
                 term_free(last_output);
+                step_session_clear(&session);
+                line_results_free(&lines);
                 return missing_arg(arg);
             }
-            status |= evaluate_source_stdout(argv[i], env, &last_output,
-                                             settings.max_steps);
+            line_results_add(&lines, NULL);
+            Term *result = NULL;
+            int rc = evaluate_source_stdout(argv[i], env, &last_output,
+                                            &lines, &session,
+                                            settings.max_steps, &result);
+            status |= rc;
+            line_results_set(&lines, lines.count, rc == 0 ? result : NULL);
+            term_free(result);
             continue;
         }
 
@@ -1811,14 +2099,24 @@ static int run_batch(int argc, char **argv, Env *env)
             fprintf(stderr, "Unknown option: %s\n", arg);
             fprintf(stderr, "Try '%s --help'.\n", argv[0]);
             term_free(last_output);
+            step_session_clear(&session);
+            line_results_free(&lines);
             return 2;
         }
 
-        status |= evaluate_source_stdout(arg, env, &last_output,
-                                         settings.max_steps);
+        line_results_add(&lines, NULL);
+        Term *result = NULL;
+        int rc = evaluate_source_stdout(arg, env, &last_output,
+                                        &lines, &session,
+                                        settings.max_steps, &result);
+        status |= rc;
+        line_results_set(&lines, lines.count, rc == 0 ? result : NULL);
+        term_free(result);
     }
 
     term_free(last_output);
+    step_session_clear(&session);
+    line_results_free(&lines);
     return status;
 }
 
@@ -1847,14 +2145,37 @@ static int run_interactive(Env *env)
 
     char line[INPUT_CAP];
     Term *last_output = NULL;
+    LineResults lines = {0};
+    StepSession session = {0};
     Settings settings = { DEFAULT_MAX_STEPS };
 
-    while (read_lambda_line("λ> ", line, sizeof line, &history)) {
+    while (1) {
+        char prompt[32];
+        snprintf(prompt, sizeof prompt, "λ[%zu]> ", lines.count + 1);
+
+        if (!read_lambda_line(prompt, line, sizeof line, &history)) break;
+
         char *input = trim_in_place(line);
 
-        if (*input == '\0') continue;
+        if (*input == '\0') {
+            if (!session.current) continue;
+
+            line_results_add(&lines, NULL);
+            size_t current_line = lines.count;
+
+            Term *current = term_clone(session.current);
+            reduce_steps_from(&current, 1, env);
+            step_session_set(&session, current);
+            replace_term(&last_output, current);
+            env_recompute_normals(env, last_output, settings.max_steps);
+            line_results_set(&lines, current_line, current);
+            term_free(current);
+            continue;
+        }
 
         history_add(&history, input);
+        line_results_add(&lines, NULL);
+        size_t current_line = lines.count;
 
         if (strcmp(input, ":q") == 0 || strcmp(input, ":quit") == 0) {
             break;
@@ -1980,12 +2301,14 @@ static int run_interactive(Env *env)
             int stopped_early = 0;
 
             if (!save_definition_from_input(env, input, err, sizeof err,
-                                            last_output, &saved,
+                                            last_output, &lines, &saved,
                                             &reduced_first, &stopped_early,
                                             NULL, settings.max_steps)) {
                 output_printf("Definition error: %s\n", err);
                 continue;
             }
+
+            line_results_set(&lines, current_line, saved);
 
             char *pretty = term_to_string(saved, 1);
             char *name = trim_in_place(input);
@@ -1999,6 +2322,28 @@ static int run_interactive(Env *env)
         }
 
         char err[256];
+        int step_limit = 0;
+        if (!parse_step_suffix(input, &step_limit, err, sizeof err)) {
+            output_printf("Parse error: %s\n", err);
+            continue;
+        }
+
+        if (*input == '\0') {
+            if (!session.current) {
+                output_printf("No gradual reduction to continue.\n");
+                continue;
+            }
+
+            Term *current = term_clone(session.current);
+            reduce_steps_from(&current, step_limit, env);
+            step_session_set(&session, current);
+            replace_term(&last_output, current);
+            env_recompute_normals(env, last_output, settings.max_steps);
+            line_results_set(&lines, current_line, current);
+            term_free(current);
+            continue;
+        }
+
         Term *parsed = parse_lambda(input, err, sizeof err);
         if (!parsed) {
             output_printf("Parse error: %s\n", err);
@@ -2006,16 +2351,24 @@ static int run_interactive(Env *env)
         }
 
         Term *new_last = NULL;
-        if (evaluate_and_print(parsed, env, last_output, settings.max_steps,
-                               &new_last)) {
-            term_free(last_output);
-            last_output = new_last;
+        if (evaluate_and_print(parsed, env, last_output, &lines,
+                               settings.max_steps, step_limit, &new_last)) {
+            if (step_limit) {
+                step_session_set(&session, new_last);
+            } else {
+                step_session_clear(&session);
+            }
+            replace_term(&last_output, new_last);
+            line_results_set(&lines, current_line, new_last);
             env_recompute_normals(env, last_output, settings.max_steps);
         }
+        term_free(new_last);
         term_free(parsed);
     }
 
     term_free(last_output);
+    step_session_clear(&session);
+    line_results_free(&lines);
     history_free(&history);
     output_free(&output);
     active_output = NULL;

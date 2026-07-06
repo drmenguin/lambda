@@ -246,9 +246,14 @@ static Token next_token_raw(const char *src, size_t *pos)
     }
 
     if (c == '%') {
+        size_t len = 0;
         t.type = TOK_IDENT;
-        strcpy(t.lexeme, "%");
+        if (!append_lexeme_char(&t, &len, '%')) return t;
         (*pos)++;
+        while (isdigit((unsigned char)src[*pos])) {
+            if (!append_lexeme_char(&t, &len, src[*pos])) return t;
+            (*pos)++;
+        }
         return t;
     }
 
@@ -336,6 +341,11 @@ static int starts_atom(TokenType ty)
     return ty == TOK_IDENT || ty == TOK_LPAREN || ty == TOK_LAMBDA;
 }
 
+static int is_history_ref_name(const char *name)
+{
+    return name[0] == '%';
+}
+
 static Term *parse_atom(Parser *p)
 {
     if (p->failed) return NULL;
@@ -410,6 +420,13 @@ static Term *parse_abstraction(Parser *p)
     }
 
     while (p->tok.type == TOK_IDENT) {
+        if (is_history_ref_name(p->tok.lexeme)) {
+            parser_error(p,
+                         "'%s' is reserved for history references and cannot be a lambda parameter",
+                         p->tok.lexeme);
+            return NULL;
+        }
+
         if (nparams >= 64) {
             parser_error(p, "too many parameters in abstraction");
             return NULL;

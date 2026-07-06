@@ -63,7 +63,8 @@ void term_free(Term *t);
        xx                 meaning x x
        x1 x2              subscripted variables, printed as x₁ x₂
        KI, Ki             uppercase-starting multi-character names
-       %                  previous-result pseudo-variable for front ends
+       %                  previous-result history reference for front ends
+       %2, %10            numbered history references for front ends
        \x.x
        \x y. x y          meaning \x.\y.(x y)
        (\x.x) y

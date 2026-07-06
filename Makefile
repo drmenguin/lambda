@@ -58,11 +58,18 @@ check: all
 		./lambda --load "$$tmpfile" '\f x.f x' | grep -F 'λf x.f x    [One*]'; \
 		rm -f "$$tmpfile"
 	./lambda '(\x.x) y' '%' | grep -F '  y'
+	./lambda '(\x.x) y' '%1' | grep -F '  y'
+	./lambda '(\x.xx)(\x.xy)z /' '/2' | grep -F '→ᵦ y y z'
+	./lambda '\%.%' 2>&1 | grep -F "reserved for history references"
 	./lambda '(\x.x) y' --define 'Saved=%' Saved | grep -F '  y    [Saved]'
+	./lambda '(\x.x) y' --define 'Saved=%1' Saved | grep -F '  y    [Saved]'
 	./lambda '(\x.x) y' --define 'Saved<-%' Saved | grep -F '  y    [Saved]'
 	./lambda --load std 'I y' | grep -F '→ᵦ y'
 	./lambda --max-steps 1 '(\x.x x) (\x.x x)' | grep -F 'Stopped after 1 steps'
 	./lambda-cli --eval '(\x.x) y' | grep -F '→ᵦ y'
+	./lambda-cli '(\x.x) y' '%1' | grep -F '  y'
+	./lambda-cli '(\x.xx)(\x.xy)z /' '/2' | grep -F '→ᵦ y y z'
+	./lambda-cli '\%.%' 2>&1 | grep -F "reserved for history references"
 	./lambda-cli --max-steps 1 '(\x.x x) (\x.x x)' | grep -F 'Stopped after 1 steps'
 	groff -man -Tutf8 lambda.1 >/dev/null
 	groff -man -Tutf8 lambda-cli.1 >/dev/null

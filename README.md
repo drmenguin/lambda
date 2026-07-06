@@ -49,9 +49,10 @@ Use `:def NAME` to show one saved definition without expanding it; eager
 definitions also show the original expression they were reduced from.
 Use `:max-steps` to show the current reduction step limit, or
 `:max-steps N` to set it for later reductions. The default is 300 steps.
-In the ncurses interface, use PageUp/PageDown or the mouse wheel to scroll
-through previous output. `:clear` clears both the terminal and the internal
-scrollback.
+In the ncurses interface, prompts are numbered. `%` refers to the previous
+reduction result, while `%2` or `%10` refers to the result from that numbered
+line. Use PageUp/PageDown or the mouse wheel to scroll through previous output.
+`:clear` clears both the terminal and the internal scrollback.
 
 When a displayed term is alpha-equivalent to saved definitions, `lambda` shows
 the matching names beside it. A `*` means the saved definition reduces to the
@@ -80,9 +81,14 @@ xx          lowercase letters split into variables: x x
 x1 x2       subscript-style variables, displayed as x₁ x₂
 KI, Ki      uppercase-starting names stay as one identifier
 %           previous reduction result in lambda
+%2          reduction result from line 2
+term /      reduce term by one beta step
+term /2     reduce term by two beta steps
+/2          continue the previous gradual reduction by two steps
 ```
 
-Both backslash and the UTF-8 lambda character are accepted as lambdas.
+Both backslash and the UTF-8 lambda character are accepted as lambdas. History
+references such as `%` and `%2` are reserved and cannot be lambda parameters.
 
 ## Installation
 ### Arch Linux
